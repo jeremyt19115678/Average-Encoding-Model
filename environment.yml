@@ -2,18 +2,21 @@ name: avg-model
 channels:
   - pytorch
   - conda-forge
+  - anaconda
   - defaults
 dependencies:
   - blas=1.0=mkl
   - bzip2=1.0.8=h1de35cc_0
-  - ca-certificates=2021.5.25=hecd8cb5_1
-  - certifi=2021.5.30=py37hecd8cb5_0
+  - ca-certificates=2020.10.14=0
+  - certifi=2020.6.20=py37_0
   - cycler=0.10.0=py37_0
   - ffmpeg=4.2.2=h97e5cf8_0
   - freetype=2.10.4=ha233b18_0
   - gettext=0.21.0=h7535e17_0
   - gmp=6.2.1=h23ab428_2
   - gnutls=3.6.15=hed9c0bf_0
+  - h5py=2.10.0=py37h0601b69_1
+  - hdf5=1.10.6=hdbbcd12_0
   - icu=58.2=h0a44026_3
   - intel-openmp=2021.2.0=hecd8cb5_564
   - jpeg=9b=he5867d9_2
@@ -22,6 +25,7 @@ dependencies:
   - lcms2=2.12=hf1fd2bf_0
   - libcxx=10.0.0=1
   - libffi=3.3=hb1e8313_2
+  - libgfortran=3.0.1=h93005f0_2
   - libiconv=1.16=h1de35cc_0
   - libidn2=2.3.1=h9ed2024_0
   - libopus=1.3.1=h1de35cc_0
