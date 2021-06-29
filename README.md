@@ -6,7 +6,8 @@ The following is essentially identical to the `conda` documentation (https://con
 1. Create the virtual environment from the `environment.yml` file:
 
         conda env create -f environment.yml
-The first line of the `environment.yml` file sets the new environment's name. It is currently set to `avg-model`.  
+
+ The first line of the `environment.yml` file sets the new environment's name. It is currently set to `avg-model`.  
 
 2. Activate the new environment through: `conda activate myenv`. If `environment.yml` has not been tampered with, `myenv` should be `avg-model`.  
 
@@ -14,11 +15,11 @@ The first line of the `environment.yml` file sets the new environment's name. It
 
         conda env list
 
-You should see something like:
+ You should see something like:
 
         myenv             *  /opt/anaconda3/envs/avg-model
 
-Again, if `environment.yml` has not been tampered with, `myenv` should be `avg-model`.
+ Again, if `environment.yml` has not been tampered with, `myenv` should be `avg-model`.
 # Acknowledgements
 This project is heavily derived from the work of my mentor, Zijin Gu. Refer to her original work (NeuroGen) here: https://github.com/zijin-gu/NeuroGen. Here is a link to the paper documenting her work: https://arxiv.org/abs/2105.07140#:~:text=NeuroGen%20combines%20an%20fMRI%2Dtrained,of%20macro%2Dscale%20brain%20activation.
 # Training Data
