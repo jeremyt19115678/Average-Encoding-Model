@@ -7,8 +7,8 @@ The following is essentially identical to the `conda` documentation (https://con
 ```
 conda env create -f environment.yml
 ```
-The first line of the `environment.yml` file sets the new environment's name. It is currently set to `avg-model`.
-2. Activate the new environment through: `conda activate myenv`. If `environment.yml` has not been tampered with, `myenv` should be `avg-model`.
+The first line of the `environment.yml` file sets the new environment's name. It is currently set to `avg-model`.  
+2. Activate the new environment through: `conda activate myenv`. If `environment.yml` has not been tampered with, `myenv` should be `avg-model`.  
 3. Verify that the new enviroment was installed correctly:
 ```
 conda env list
