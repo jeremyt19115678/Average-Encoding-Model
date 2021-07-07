@@ -30,4 +30,5 @@ There is a relatively small number of images that are shown to all 8 subjects of
 - Implement a command line interface to specify the network architecture (e.g. Alex-Net-like CNN, fully connected ANN, etc.) and optimization techniques (e.g. Adam, SGD, and hyperparameters). Status: **SOMEWHAT COMPLETED**.
 - Implement a logging system for effective debugging. Status: **SETUP COMPLETED**.
 - Figure out the data distribution and what to do with them (w.r.t. to shared images, partially shared images, and unique images). Status: **COMPLETED, decided to do imputation.**
+- Brief preliminary visualization of training data. Status: **PARTIALLY COMPLETED**.
 - Imputation of data through kNN + SVD. Status: **INCOMPLETE**.
