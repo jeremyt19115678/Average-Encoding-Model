@@ -5,9 +5,9 @@ import numpy as np
 import os
 from scipy.io import loadmat
 import re
+import matplotlib.pyplot as plt
 '''
 import torch
-import matplotlib.pyplot as plt
 '''
 
 # return the arguments
@@ -131,3 +131,56 @@ def basic_info():
     print("Passed all sanity checks.")
     return responses
 
+# save plot with filename
+def save_plot(filename):
+    graphics_folder = os.path.realpath('graphs')
+    if not os.path.isdir(graphics_folder):
+        os.makedirs(graphics_folder)
+    plt.savefig(os.path.join(graphics_folder, filename))
+    plt.clf()
+
+# get the spread of the data (when they are shown multiple times to the same subject)
+def get_spread(analyze_part="all"):
+    print("Reading from .txt files...")
+    responses = basic_info()
+    if analyze_part == "all":
+        lengths = [10000, 10000, 6234, 5445, 10000, 6234, 10000, 5445]
+        for subject in range(8):
+            print("Plotting for subject {}...".format(subject + 1)) # 0-index to 1-index
+            nested_dict = responses[subject]
+            spreads = []
+            for activation_list in nested_dict.values():
+                assert len(activation_list) == 28
+                for activations in activation_list.values():
+                    try:
+                        assert len(activations) == 3
+                        diff = max(activations) - min(activations)
+                        spreads.append(diff)
+                    except:
+                        break
+            assert len(spreads) == lengths[subject] * 28, "Spreads length {} is less than expected {}.".format(len(spreads), lengths[subject] * 28)
+            plt.xlabel("Difference in Activation")
+            plt.ylabel("Count")
+            bins = np.linspace(0, 2.5, num=21)
+            plt.hist(spreads, bins=bins)
+            save_plot("subj0{}_spread.png".format(subject + 1)) # convert from 0-index to 1-index
+    elif analyze_part == "shared":
+        shared_images = image_sequence()[:1000]
+        assert len(set(shared_images)) == 1000, "Shared images are not unique"
+        shared_images_all_three = []
+        for image in shared_images:
+            try:
+                for i in range(8):
+                    activation_dict = responses[i][image]
+                    for values in activation_dict.values():
+                        assert len(values) == 3
+                shared_images_all_three.append(image)
+            except:
+                continue
+        # there should be 515 images that are shown all 3 times to every subject
+        assert len(shared_images_all_three) == 515
+        print("Passed Assertion.")
+
+# visualize the shared 1000 stimuli
+def visualize_shared_stimuli():
+    get_spread(analyze_part="shared")
