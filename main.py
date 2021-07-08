@@ -77,6 +77,19 @@ def image_sequence():
     ordering = exp_design['masterordering'].flatten() - 1
     return ordering.tolist() # cast to Python List
 
+# return the list of IDs of images that are shared across all subjects
+def get_shared_images():
+    exp_design_file = os.path.realpath("nsd_expdesign.mat")
+    exp_design = loadmat(exp_design_file)
+    image_ID_mapping = exp_design['subjectim'] - 1
+    assert image_ID_mapping.shape == (8, 10000)
+    image_ID_mapping = image_ID_mapping.transpose().tolist()
+    shared_list = []
+    for image_num, ids in enumerate(image_ID_mapping):
+        if len(set(ids)) == 1: # only one element in the ids
+            shared_list.append(image_num)
+    return shared_list
+
 # get some basic info regarding the data set:
 # if an image is shown multiple times to a subject, how different are the activations each time?
 # visualize the shared 1000 images activation 
@@ -140,7 +153,10 @@ def save_plot(filename):
     plt.clf()
 
 # get the spread of the data (when they are shown multiple times to the same subject)
-def get_spread(analyze_part="all"):
+def get_spread(analyze_part="all", log_scale = False):
+    if analyze_part != "all" and analyze_part != "shared":
+        print("analyze_part parameter must either be 'all' or 'shared'.")
+        return
     print("Reading from .txt files...")
     responses = basic_info()
     if analyze_part == "all":
@@ -161,12 +177,19 @@ def get_spread(analyze_part="all"):
             assert len(spreads) == lengths[subject] * 28, "Spreads length {} is less than expected {}.".format(len(spreads), lengths[subject] * 28)
             plt.xlabel("Difference in Activation")
             plt.ylabel("Count")
-            bins = np.linspace(0, 2.5, num=21)
+            if not log_scale:
+                bins = np.linspace(0, 2.5, num=21)
+            else:
+                bins = np.logspace(np.log10(0.02), np.log10(2), 21)
+                plt.gca().set_xscale("log")
             plt.hist(spreads, bins=bins)
-            save_plot("subj0{}_spread.png".format(subject + 1)) # convert from 0-index to 1-index
+            if not log_scale:
+                save_plot("subj0{}_spread.png".format(subject + 1)) # convert from 0-index to 1-index
+            else:
+                save_plot("subj0{}_spread_log.png".format(subject + 1)) # convert from 0-index to 1-index
     elif analyze_part == "shared":
-        shared_images = image_sequence()[:1000]
-        assert len(set(shared_images)) == 1000, "Shared images are not unique"
+        shared_images = get_shared_images()
+        assert len(set(shared_images)) == 1000 and len(shared_images) == 1000, "Shared images are not unique/shared images number more than 1000"
         shared_images_all_three = []
         for image in shared_images:
             try:
@@ -179,6 +202,25 @@ def get_spread(analyze_part="all"):
                 continue
         # there should be 515 images that are shown all 3 times to every subject
         assert len(shared_images_all_three) == 515
+        for subject in range(8):
+            spreads = []
+            for image in shared_images_all_three:
+                for activation_list in responses[subject][image].values():
+                    diff = max(activation_list) - min(activation_list)
+                    spreads.append(diff)
+            assert len(spreads) == 515 * 28
+            plt.xlabel("Difference in Activation")
+            plt.ylabel("Count")
+            if not log_scale:
+                bins = np.linspace(0, 2.5, num=21)
+            else:
+                bins = np.logspace(np.log10(0.02), np.log10(2), 21)
+                plt.gca().set_xscale("log")
+            plt.hist(spreads, bins=bins)
+            if not log_scale:
+                save_plot("subj0{}_shared_set_spread.png".format(subject + 1)) # convert from 0-index to 1-index
+            else:
+                save_plot("subj0{}_shared_set_spread_log.png".format(subject + 1)) # convert from 0-index to 1-index
         print("Passed Assertion.")
 
 # visualize the shared 1000 stimuli
