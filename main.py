@@ -90,6 +90,10 @@ def get_shared_images():
             shared_list.append(image_num)
     return shared_list
 
+# return a sorted list of ROIs
+def get_ROIs():
+    return sorted(['OFA', 'FFA1', 'FFA2', 'mTLfaces', 'aTLfaces', 'EBA', 'FBA1', 'FBA2', 'mTLbodies', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'mTLwords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4', 'L_amygdala', 'L_hippocampus', 'R_amygdala', 'R_hippocampus'])
+
 # get some basic info regarding the data set:
 # if an image is shown multiple times to a subject, how different are the activations each time?
 # visualize the shared 1000 images activation 
@@ -133,10 +137,10 @@ def basic_info():
         assert len(responses[i].keys()) == num_distinct[i] # number of distinct images of the subject should match
         occurrence = [0 for i in range(10000)] #number of times each image was shown to the subject
         for j in ordering[:num_trials[i]]:
-                occurrence[j] += 1
+            occurrence[j] += 1
         assert sum(occurrence) == num_trials[i] # number of trials should match
         for imageID, res_val in responses[i].items():
-                assert len(res_val) == 28 # there should be 28 ROIs
+                assert sorted(list(res_val.keys())) == get_ROIs(), "Expected: {}\n, Got: {}\n".format(get_ROIs(), sorted(list(res_val.keys()))) # check if the ROIs are expected
                 for act_list in res_val.values():
                         assert len(act_list) == occurrence[imageID]
                         for activation in act_list:
@@ -226,3 +230,58 @@ def get_spread(analyze_part="all", log_scale = False):
 # visualize the shared 1000 stimuli
 def visualize_shared_stimuli():
     get_spread(analyze_part="shared")
+
+# set apart the validation data set
+# output a file that contains all 907 shared images that are shown at least once to every subject
+# a file for each ROI for the average activation (across all trials)
+def extract_validation_set():
+    responses = basic_info()
+    shared_set = get_shared_images() # will contain the list of shared images
+    # there should be 907 images that has a "correct answer"
+    shown_shared = []
+    for img in shared_set:
+        in_all = True
+        for nested_dict in responses:
+            if img not in nested_dict:
+                in_all = False
+                break
+        if in_all:
+            shown_shared.append(img)
+    assert len(shown_shared) == 907
+    # read from a h5py file to get the shared images
+    image_data_set = h5py.File(os.path.join(os.path.realpath('NSD_stimuli'), 'S1_stimuli_227.h5py'), 'r')
+    image_data = np.copy(image_data_set['stimuli']).astype(np.float32) / 255. # convert to [0, 1]
+    image_data_set.close()
+    assert image_data.shape == (10000, 3, 227, 227)
+
+    shared_image_data = image_data[shown_shared]
+    assert (shared_image_data.shape) == (907, 3, 227, 227), "Unexpected shape: {}".format(shared_image_data.shape)
+
+    # save everything in validation set
+    validation_folder = os.path.realpath('validation')
+    if not os.path.isdir(validation_folder):
+        os.makedirs(validation_folder)
+    # save the shared_image_data somehow (perhaps h5py)
+    with h5py.File(os.path.join(validation_folder, 'shared_images.h5py'), 'w') as f:
+        f.create_dataset("image_data", data=shared_image_data)
+    # save the stimuli per ROI
+    roi_activation = {} # maps ROI (28 of them) to list of activations (907 of them)
+    # 907 actiavtions in the same order as the images are shown
+    ROIs = get_ROIs()
+    for roi in ROIs:
+        img_activations = []
+        for img in shown_shared:
+            subject_responses = [np.mean(responses[subj][img][roi]) for subj in range(8)]
+            img_activations.append(subject_responses)
+        assert len(img_activations) == 907
+        roi_activation[roi] = img_activations
+    assert len(roi_activation.keys()) == 28, "Number of activation ({}) is different from expected 28.".format(len(roi_activation.keys()))
+    for roi, activations in roi_activation.items():
+        with open(os.path.join(validation_folder, "average_activation_{}.txt".format(roi)), 'w') as f:
+            texts = ""
+            for image_activations in activations:
+                line = ""
+                for activation in image_activations:
+                    line += str(activation) + ','
+                texts += line[:-1] + '\n'
+            f.write(texts[:-1])
