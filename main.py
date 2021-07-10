@@ -266,7 +266,7 @@ def extract_validation_set():
         f.create_dataset("image_data", data=shared_image_data)
     # save the stimuli per ROI
     roi_activation = {} # maps ROI (28 of them) to list of activations (907 of them)
-    # 907 actiavtions in the same order as the images are shown
+    # 907 average activations, ignoring NaN (because some ROIs are not present in all subjects)
     ROIs = get_ROIs()
     for roi in ROIs:
         img_activations = []
@@ -279,9 +279,15 @@ def extract_validation_set():
     for roi, activations in roi_activation.items():
         with open(os.path.join(validation_folder, "average_activation_{}.txt".format(roi)), 'w') as f:
             texts = ""
+            nan_indices = []
             for image_activations in activations:
-                line = ""
-                for activation in image_activations:
-                    line += str(activation) + ','
-                texts += line[:-1] + '\n'
-            f.write(texts[:-1])
+                texts += str(np.nanmean(image_activations)) + '\n'
+                nan_index_line = np.where(np.isnan(np.array(image_activations)))[0].tolist()
+                nan_index_line = tuple(sorted(list(set(nan_index_line))))
+                nan_indices.append(nan_index_line)
+            f.write(texts[:-1]) # get rid of the last '\n
+            if len(set(nan_indices)) == 1 and len(nan_indices[0]) > 0:
+                one_indexed_nan_indices = [i+1 for i in nan_indices[0]]
+                print("Subjects that do not have ROI {}: {}".format(roi, one_indexed_nan_indices))
+            if len(set(nan_indices)) != 1:
+                print("Unexpected NaN value encountered in ROI: {}".format(roi))

@@ -34,6 +34,23 @@ Note that the `validation` folder holds the validation/test set (**the precise u
 - Brief preliminary visualization of training data. Status: **MOSTLY COMPLETED**. This task was carried out to determine if those pictures that the subject has seen multiple time are spread out significantly. If they are not spread out too much (i.e. the activations are consistent), we can just take the mean, which can reduce the training samples by 3 times. The relevant graphs generated are in the `graphs` folder. The results showed that the data are quite spread out, and the spread of activation is similar in all subjects whether it is the shared image set or the entire image set. Furthermore, as per Zijin's advice, it is desirable to get all response as the training data to prevent underfitting.
 - Imputation of data through kNN + SVD. Status: **INCOMPLETE**.
 - Set apart the validation data set. Status: **IN PROGRESS**.
-- Investigate AlexNet feature space as a means of imputation and dimensionality reduction. Status: **INCOMPLETE**.
-- Add option to suppress sanity checks/assertions. Status: **INCOMPLETE**.
-- Find out all the nan values and figure out what to do with them. Status: **INCOMPLETE**.
+- Investigate AlexNet feature space as a means of imputation and dimensionality reduction. Status: **IN PROGRESS**. AlexNet (at least the one implemented in Zijin's NeuroGen) takes in a 4D PyTorch Tensor of shape (n, 3, 227, 227), where n is the number of images. The output is 8 tensors, which is the output from each of the 5 convolutional layers and the 3 fully connected layers. The shapes are:
+    * (n, 64, 27, 27)
+    * (n, 192, 27, 27)
+    * (n, 384, 13, 13)
+    * (n, 256, 13, 13)
+    * (n, 256, 13, 13)
+    * (n, 4096, 1, 1)
+    * (n, 4096, 1, 1)
+    * (n, 1000, 1, 1)
+    We still need to figure out what to use as the feature space (probably the flattened input).
+- Add option to suppress sanity checks/assertions and refactor code. Status: **INCOMPLETE, but LOW PRIORITY**.
+- Find out all the NaN values and figure out what to do with them. Status: **COMPLETED**. Some subjects have certain ROIs missing, so their activation is NaN. The precise list is as follows:
+    | ROI       | Subjects that do NOT have this ROI |
+    |-----------|------------------------------------|
+    | aTLfaces  | 4                                  |
+    | FBA1      | 2, 7                               |
+    | mTLbodies | 1, 2, 3, 7                         |
+    | mTLfaces  | 1, 2, 3, 6                         |
+    | mTLwords  | 3                                  |
+    The data in the `validation` folders are the mean activation among those subjects that do have the certain ROI.
