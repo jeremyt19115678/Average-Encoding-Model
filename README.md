@@ -53,4 +53,5 @@ Note that the `validation` folder holds the validation/test set (**the precise u
     | mTLbodies | 1, 2, 3, 7                         |
     | mTLfaces  | 1, 2, 3, 6                         |
     | mTLwords  | 3                                  |
+    
     The data in the `validation` folders are the mean activation among those subjects that do have the certain ROI.
