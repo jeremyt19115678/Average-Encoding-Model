@@ -6,6 +6,8 @@ import os
 from scipy.io import loadmat
 import re
 import matplotlib.pyplot as plt
+import time
+import json
 '''
 import torch
 '''
@@ -291,3 +293,53 @@ def extract_validation_set():
                 print("Subjects that do not have ROI {}: {}".format(roi, one_indexed_nan_indices))
             if len(set(nan_indices)) != 1:
                 print("Unexpected NaN value encountered in ROI: {}".format(roi))
+
+# generate a folder for a certain experiment, identified by the time stamp (and perhaps setup)
+def generate_k_fold_dataset(partition: int):
+    # make sure validation set exists and is in normal state
+    validation_folder = os.path.realpath('validation')
+    if not os.path.isdir(validation_folder):
+        extract_validation_set()
+    rois = []
+    for file in os.listdir(validation_folder):
+        filename = os.path.join(validation_folder, os.fsdecode(file))
+        file_extension = os.path.splitext(filename)
+        if file_extension[1] == '.txt':
+            roi = re.search("average_activation_(.*).txt", filename).group(1)
+            rois.append(roi)
+    if sorted(rois) != get_ROIs():
+        extract_validation_set()
+    print("Validation folder should exist and is functional.")
+    
+    # make the experiment folder if it doesn't exist
+    experiment_path = os.path.realpath('experiments')
+    if not os.path.exists(experiment_path):
+        os.makedirs(os.path.realpath(experiment_path))
+    while True:
+        curr_time_ms = str(round(time.time()*1000))
+        experiment_folder = os.path.realpath(os.path.join(experiment_path, "cross_validation_{}").format(curr_time_ms))
+        if os.path.exists(experiment_folder): # if an experiment has already been created within the time, we wait for a while
+            continue
+        else:
+            os.makedirs(experiment_folder)
+            break # we move on putting the content in the experiment folder knowing that it won't overwrite any other data
+    # load the images to get the length of the validation images
+    images = h5py.File(os.path.join(validation_folder, 'shared_images.h5py'), 'r')
+    length = len(np.copy(images['image_data'])) if 'image_data' in images else None
+    images.close()
+    assert length != None and length >= 0, "Read from shared file should've been effective"
+    indices = np.arange(length)
+    np.random.shuffle(indices)
+    indices_groups = np.array_split(indices, partition) #should be a python list of np arrays
+    partitions = [{'test': indices_groups[i].astype(int).tolist(), 'train': np.concatenate(tuple(indices_groups[:i]) + tuple(indices_groups[i+1:])).astype(int).tolist()} for i in range(partition)]
+    # more sanity checks
+    for dict in partitions:
+        used_indices = []
+        for li in dict.values():
+            used_indices += li
+        used_indices_sorted = sorted(used_indices)
+        assert used_indices_sorted == [i for i in range(length)], "{}".format(used_indices_sorted.shape) #"Did not use all of validation set for testing/training"
+    with open(os.path.join(experiment_folder, 'about.json'), 'w') as f:
+        obj = {'partitions': partitions, 'completed': False}
+        f.write(json.dumps(obj))
+    print("Experiment file ({}) should be created.".format(experiment_folder))
