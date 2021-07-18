@@ -8,9 +8,10 @@ import re
 import matplotlib.pyplot as plt
 import time
 import json
-'''
 import torch
-'''
+from torch import nn
+from torch.utils.data import Dataset, DataLoader
+from alexnet import Alexnet_fmaps
 
 # return the arguments
 def get_args():
@@ -52,24 +53,6 @@ if __name__ == "__main__":
         print(dset.shape)
     '''
     pass
-
-def sanity_check():
-    mismatch_indices = {}
-    for a in range(1, 9):
-        filepath = os.path.realpath("NSD_stimuli/S{}_stimuli_227.h5py".format(a))
-        f1 = h5py.File(filepath, 'r')
-        dset1 = f1['stimuli']
-        for b in range(a, 9):
-            filepath = os.path.realpath("NSD_stimuli/S{}_stimuli_227.h5py".format(b))
-            f2 = h5py.File(filepath, 'r')
-            dset2 = f2['stimuli'] # should be an array-like structure
-            mismatch = []
-            for i in range(10000):
-                if not np.array_equal(dset1[i], dset2[i]):
-                    mismatch.append(i)
-            mismatch_indices[(a,b)] = mismatch
-    return mismatch_indices
-    #print("There are {} mismatches:\n{}".format(len(mismatch_indices), mismatch_indices))
 
 #return a list of the sequence in which the images are presented to the subject
 def image_sequence():
@@ -151,87 +134,16 @@ def basic_info():
     return responses
 
 # save plot with filename
-def save_plot(filename):
-    graphics_folder = os.path.realpath('graphs')
-    if not os.path.isdir(graphics_folder):
-        os.makedirs(graphics_folder)
+def save_plot(filename, custom_path = None):
+    if custom_path == None:
+        graphics_folder = os.path.realpath('graphs')
+        if not os.path.isdir(graphics_folder):
+            os.makedirs(graphics_folder)
+    else:
+        graphics_folder = os.path.realpath(custom_path)
+        assert os.path.isdir(custom_path), "{} is not a valid path.".format(custom_path)
     plt.savefig(os.path.join(graphics_folder, filename))
     plt.clf()
-
-# get the spread of the data (when they are shown multiple times to the same subject)
-def get_spread(analyze_part="all", log_scale = False):
-    if analyze_part != "all" and analyze_part != "shared":
-        print("analyze_part parameter must either be 'all' or 'shared'.")
-        return
-    print("Reading from .txt files...")
-    responses = basic_info()
-    if analyze_part == "all":
-        lengths = [10000, 10000, 6234, 5445, 10000, 6234, 10000, 5445]
-        for subject in range(8):
-            print("Plotting for subject {}...".format(subject + 1)) # 0-index to 1-index
-            nested_dict = responses[subject]
-            spreads = []
-            for activation_list in nested_dict.values():
-                assert len(activation_list) == 28
-                for activations in activation_list.values():
-                    try:
-                        assert len(activations) == 3
-                        diff = max(activations) - min(activations)
-                        spreads.append(diff)
-                    except:
-                        break
-            assert len(spreads) == lengths[subject] * 28, "Spreads length {} is less than expected {}.".format(len(spreads), lengths[subject] * 28)
-            plt.xlabel("Difference in Activation")
-            plt.ylabel("Count")
-            if not log_scale:
-                bins = np.linspace(0, 2.5, num=21)
-            else:
-                bins = np.logspace(np.log10(0.02), np.log10(2), 21)
-                plt.gca().set_xscale("log")
-            plt.hist(spreads, bins=bins)
-            if not log_scale:
-                save_plot("subj0{}_spread.png".format(subject + 1)) # convert from 0-index to 1-index
-            else:
-                save_plot("subj0{}_spread_log.png".format(subject + 1)) # convert from 0-index to 1-index
-    elif analyze_part == "shared":
-        shared_images = get_shared_images()
-        assert len(set(shared_images)) == 1000 and len(shared_images) == 1000, "Shared images are not unique/shared images number more than 1000"
-        shared_images_all_three = []
-        for image in shared_images:
-            try:
-                for i in range(8):
-                    activation_dict = responses[i][image]
-                    for values in activation_dict.values():
-                        assert len(values) == 3
-                shared_images_all_three.append(image)
-            except:
-                continue
-        # there should be 515 images that are shown all 3 times to every subject
-        assert len(shared_images_all_three) == 515
-        for subject in range(8):
-            spreads = []
-            for image in shared_images_all_three:
-                for activation_list in responses[subject][image].values():
-                    diff = max(activation_list) - min(activation_list)
-                    spreads.append(diff)
-            assert len(spreads) == 515 * 28
-            plt.xlabel("Difference in Activation")
-            plt.ylabel("Count")
-            if not log_scale:
-                bins = np.linspace(0, 2.5, num=21)
-            else:
-                bins = np.logspace(np.log10(0.02), np.log10(2), 21)
-                plt.gca().set_xscale("log")
-            plt.hist(spreads, bins=bins)
-            if not log_scale:
-                save_plot("subj0{}_shared_set_spread.png".format(subject + 1)) # convert from 0-index to 1-index
-            else:
-                save_plot("subj0{}_shared_set_spread_log.png".format(subject + 1)) # convert from 0-index to 1-index
-        print("Passed Assertion.")
-
-# visualize the shared 1000 stimuli
-def visualize_shared_stimuli():
-    get_spread(analyze_part="shared")
 
 # set apart the validation data set
 # output a file that contains all 907 shared images that are shown at least once to every subject
@@ -343,3 +255,127 @@ def generate_k_fold_dataset(partition: int):
         obj = {'partitions': partitions, 'completed': False}
         f.write(json.dumps(obj))
     print("Experiment file ({}) should be created.".format(experiment_folder))
+
+# returns a np array of shape (length,) and 0 at every index except position (where there's a 1)
+def one_hot_np(length: int, position: int):
+    assert isinstance(position, int) and 0 <= position <= length
+    arr = np.zeros(length).tolist()
+    arr[position] = 1
+    return np.array(arr)
+
+'''
+class Average_Model(nn.Module):
+    def __init__(self, learning_rate):
+        super(Average_Model, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(9216 + 28, 4096),
+            nn.ReLU(),
+            nn.Linear(4096, 1000),
+            nn.ReLu(),
+            nn.Linear(1000, 1)
+        )
+        self.lr = learning_rate
+    
+    def forward(self, x):
+        return self.net(x)
+
+class Custom_Dataset(Dataset):
+    def __init__(self, partition: list):
+        images_path = os.path.realpath('validation/shared_images.h5py')
+        assert os.path.exists(images_path)
+        # get all the images
+        image_file = h5py.File(images_path, 'r')
+        all_images = np.copy(image_file['image_data']).astype(np.float32)
+        image_file.close()
+        # convert images into AlexNet readings
+        input_tensor = torch.from_numpy(all_images)
+        alexnet = Alexnet_fmaps()
+        readings = alexnet(input_tensor)[5]
+        assert isinstance(readings, torch.Tensor)
+        readings = readings.cpu().detach().numpy()
+        assert readings.shape[1] == 9216
+        self.fmaps = readings
+        # generate one hot from partition, which should be a list of numbers
+        assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
+        self.image_ids = partition
+        self.rois = get_ROIs()
+
+    def __len__(self):
+        return len(self.images_ids) * len(self.rois)
+
+    def __getitem__(self, index):
+        # map from index to the id of the image and the roi
+        # get the id of the image and roi
+        image_ind = int(index / len(self.rois))
+        roi_id = index % len(self.rois)
+        roi = self.rois[roi_id]
+        # concatenate the image feature w/ the one hot encoding of roi for the input Tensor
+        input_np = np.concatenate(self.fmaps[image_ind], one_hot_np(roi))
+        input = torch.from_numpy(input_np)
+        # fetch the label of this image
+        filename = os.path.realpath('validation/average_activation_{}.txt'.format(roi))
+        activation_list = np.loadtxt(filename)
+        label = torch.tensor(activation_list[image_ind])
+        return input, label
+'''
+
+# find the newest cv folder, run the CV on the model described in description
+# get the MSE and save description
+def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
+    structure = "This is a CV on a NN with 9216+28 input dimension, \
+                two hidden layer with 4096 and 1000 neurons, respectively, \
+                and one single output. The 9216 of the input comes from the \
+                output of the last convolutional layer of AlexNet, and the \
+                remaining 28 is an one-hot encoding of the ROI of interest."
+
+    # find the oldest CV folder
+    directory_str = os.path.realpath('experiments')
+    directory = os.fsencode(directory_str)
+    timestamps = []
+    for file in os.listdir(directory):
+        folder = os.path.join(directory_str, os.fsdecode(file))
+        if "cross_validation_" in folder:
+            # open the json if it exists, check if it's completed
+            about_path = os.path.join(folder, 'about.json')
+            if os.path.exists(about_path):
+                with open(about_path, 'r') as f:
+                    cv_info = json.load(f)
+                    if isinstance(cv_info, dict) and 'partitions' in cv_info and 'completed' in cv_info and not cv_info['completed']:
+                        timestamps.append(float(re.search("cross_validation_(.*)", folder).group(1)))
+    if len(timestamps) == 0:
+        print("Cannot find any cross validation that haven't been done already. Consider calling generate_k_fold_dataset()")
+        return
+    filename = os.path.join(directory_str, "cross_validation_{}".format(str(int(min(timestamps)))))
+    print("Running experiment dataset at: {}".format(filename))
+
+    '''
+    # generate the Torch Dataset and the DataLoader
+    with open(os.path.join(filename, "about.json"), 'r') as f:
+        cv_info = json.load(f)
+
+    # train the model (from PyTorch tutorial)
+    model = Average_Model()
+    loss_fn = nn.MSELoss()
+    if optimizer_type == "SGD":
+        optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+
+    # Get cpu or gpu device for training.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("Using {} device".format(device))
+
+    def train(dataloader, model, loss_fn, optimizer):
+        for batch, (X, y) in enumerate(dataloader):
+            X, y = X.to(device), y.to(device)
+            pred = model(X)
+            loss = loss_fn(pred, y)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+    for i in range(epoch):
+        train(loader, model, loss_fn, optimizer)
+        # TODO: test the model
+    # evaluate the model, note the MSE
+    # plot the model's progression over time
+    # write back to about.json
+    '''
