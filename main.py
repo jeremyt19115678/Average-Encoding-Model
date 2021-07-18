@@ -263,9 +263,8 @@ def one_hot_np(length: int, position: int):
     arr[position] = 1
     return np.array(arr)
 
-'''
 class Average_Model(nn.Module):
-    def __init__(self, learning_rate):
+    def __init__(self):
         super(Average_Model, self).__init__()
         self.net = nn.Sequential(
             nn.Linear(9216 + 28, 4096),
@@ -274,7 +273,6 @@ class Average_Model(nn.Module):
             nn.ReLu(),
             nn.Linear(1000, 1)
         )
-        self.lr = learning_rate
     
     def forward(self, x):
         return self.net(x)
@@ -301,23 +299,22 @@ class Custom_Dataset(Dataset):
         self.rois = get_ROIs()
 
     def __len__(self):
-        return len(self.images_ids) * len(self.rois)
+        return len(self.image_ids) * len(self.rois)
 
     def __getitem__(self, index):
         # map from index to the id of the image and the roi
         # get the id of the image and roi
-        image_ind = int(index / len(self.rois))
+        image_ind = self.image_ids[int(index / len(self.rois))]
         roi_id = index % len(self.rois)
         roi = self.rois[roi_id]
         # concatenate the image feature w/ the one hot encoding of roi for the input Tensor
-        input_np = np.concatenate(self.fmaps[image_ind], one_hot_np(roi))
+        input_np = np.concatenate((self.fmaps[image_ind], one_hot_np(len(self.rois), roi_id)))
         input = torch.from_numpy(input_np)
         # fetch the label of this image
         filename = os.path.realpath('validation/average_activation_{}.txt'.format(roi))
         activation_list = np.loadtxt(filename)
         label = torch.tensor(activation_list[image_ind])
         return input, label
-'''
 
 # find the newest cv folder, run the CV on the model described in description
 # get the MSE and save description
@@ -348,10 +345,17 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
     filename = os.path.join(directory_str, "cross_validation_{}".format(str(int(min(timestamps)))))
     print("Running experiment dataset at: {}".format(filename))
 
-    '''
     # generate the Torch Dataset and the DataLoader
     with open(os.path.join(filename, "about.json"), 'r') as f:
         cv_info = json.load(f)
+
+    num_partitions = len(cv_info['partitions'])
+    for partition in cv_info['partitions']:
+        test_set = partition['test']
+        train_set = partition['train']
+        test_set_torch = Custom_Dataset(test_set)
+        train_set_torch = Custom_Dataset(train_set)
+        # create the loader
 
     # train the model (from PyTorch tutorial)
     model = Average_Model()
@@ -378,4 +382,3 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
     # evaluate the model, note the MSE
     # plot the model's progression over time
     # write back to about.json
-    '''
