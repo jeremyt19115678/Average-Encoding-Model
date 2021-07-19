@@ -270,12 +270,12 @@ class Average_Model(nn.Module):
             nn.Linear(9216 + 28, 4096),
             nn.ReLU(),
             nn.Linear(4096, 1000),
-            nn.ReLu(),
+            nn.ReLU(),
             nn.Linear(1000, 1)
         )
     
     def forward(self, x):
-        return self.net(x)
+        return torch.flatten(self.net(x))
 
 class Custom_Dataset(Dataset):
     def __init__(self, partition: list):
@@ -308,18 +308,18 @@ class Custom_Dataset(Dataset):
         roi_id = index % len(self.rois)
         roi = self.rois[roi_id]
         # concatenate the image feature w/ the one hot encoding of roi for the input Tensor
-        input_np = np.concatenate((self.fmaps[image_ind], one_hot_np(len(self.rois), roi_id)))
+        input_np = np.concatenate((self.fmaps[image_ind], one_hot_np(len(self.rois), roi_id))).astype(np.float32)
         input = torch.from_numpy(input_np)
         # fetch the label of this image
         filename = os.path.realpath('validation/average_activation_{}.txt'.format(roi))
-        activation_list = np.loadtxt(filename)
+        activation_list = np.loadtxt(filename).astype(np.float32)
         label = torch.tensor(activation_list[image_ind])
         return input, label
 
 # find the newest cv folder, run the CV on the model described in description
 # get the MSE and save description
 def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
-    structure = "This is a CV on a NN with 9216+28 input dimension, \
+    description = "This is a CV on a NN with 9216+28 input dimension, \
                 two hidden layer with 4096 and 1000 neurons, respectively, \
                 and one single output. The 9216 of the input comes from the \
                 output of the last convolutional layer of AlexNet, and the \
@@ -350,23 +350,13 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
         cv_info = json.load(f)
 
     num_partitions = len(cv_info['partitions'])
-    for partition in cv_info['partitions']:
-        test_set = partition['test']
-        train_set = partition['train']
-        test_set_torch = Custom_Dataset(test_set)
-        train_set_torch = Custom_Dataset(train_set)
-        # create the loader
-
-    # train the model (from PyTorch tutorial)
-    model = Average_Model()
-    loss_fn = nn.MSELoss()
-    if optimizer_type == "SGD":
-        optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+    print("Running {}-fold CV...".format(num_partitions))
 
     # Get cpu or gpu device for training.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using {} device".format(device))
 
+    # functions to be called during training and testing
     def train(dataloader, model, loss_fn, optimizer):
         for batch, (X, y) in enumerate(dataloader):
             X, y = X.to(device), y.to(device)
@@ -375,10 +365,73 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+    def test(dataloader, model, loss_fn):
+        test_loss = []
+        with torch.no_grad():
+            for X,y in dataloader:
+                pred = model(X)
+                test_loss.append(loss_fn(pred, y).item())
+        return np.mean(test_loss)
 
-    for i in range(epoch):
-        train(loader, model, loss_fn, optimizer)
-        # TODO: test the model
-    # evaluate the model, note the MSE
-    # plot the model's progression over time
+    error_list = []
+    # CV itself
+    for partition_num, partition in enumerate(cv_info['partitions']):
+        print("Training fold {}".format(partition_num))
+        test_set = partition['test']
+        train_set = partition['train']
+        test_set_torch = Custom_Dataset(test_set)
+        train_set_torch = Custom_Dataset(train_set)
+
+        # create the loader
+        test_loader = DataLoader(test_set_torch, shuffle=True, batch_size=64)
+        train_loader = DataLoader(train_set_torch)
+
+        # train the model (from PyTorch tutorial)
+        model = Average_Model()
+        loss_fn = nn.MSELoss()
+        if optimizer_type == "SGD":
+            optim = torch.optim.SGD(model.parameters(), lr=learning_rate)
+        test_points = np.linspace(0, epoch, num=min(25, epoch), endpoint = False).astype(int)[1:]
+        mse_dict = {}
+        for i in range(epoch):
+            train(train_loader, model, loss_fn, optim)
+            # evaluate the model every once in a while and save it
+            if i in test_points:
+                test_error = test(test_loader, model, loss_fn)
+                train_error= test(train_loader,model, loss_fn)
+                print("Epoch: {} / {}\tTrain MSE: {}\tTest MSE: {}".format(i + 1, epoch, round(train_error, 4), round(test_error, 4)))
+                new_test_list = mse_dict.get('test', [])
+                new_test_list.append(test_error)
+                new_train_list = mse_dict.get('train', [])
+                new_train_list.append(train_error)
+                mse_dict['test'] = new_test_list
+                mse_dict['train']= new_train_list
+        final_test_error, final_train_error = test(test_loader, model, loss_fn), test(train_loader, model, loss_fn)
+        print("Final model MSE:: {}".format(test(test_loader, model, loss_fn)))
+        mse_dict['test'].append(final_test_error)
+        mse_dict['train'].append(final_train_error)
+        error_list.append(mse_dict)
+
     # write back to about.json
+    with open(os.path.join(filename, "about.json"), 'w') as f:
+        cv_info['completed'] = True
+        cv_info['description'] = description
+        cv_info['errors'] = error_list
+        f.write(json.dumps(cv_info))
+    print("Updated about.json.")
+
+    # plot the progress from error_list
+    all_folds_train_error = np.array([i['train'] for i in error_list])
+    all_folds_test_error  = np.array([i['test'] for i in error_list])
+    avg_train_error_list = [np.mean(all_folds_train_error[:,i]) for i in range(all_folds_train_error.shape[1])]
+    avg_test_error_list  = [np.mean(all_folds_test_error [:,i]) for i in range(all_folds_test_error.shape [1])]
+
+    test_points += 1
+    plt.plot(test_points, avg_train_error_list, label="Avg. Training MSE")
+    plt.plot(test_points, avg_test_error_list, label ="Avg. Testing MSE")
+    # plot the models' progression over time for all folds
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE")
+    plt.title("Average Training/Testing MSE over Time")
+    plt.legend()
+    save_plot(custom_path=os.path.join(filename, "avg_progress.png"))
