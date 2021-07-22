@@ -297,6 +297,12 @@ class Custom_Dataset(Dataset):
         assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
         self.image_ids = partition
         self.rois = get_ROIs()
+        self.roi_activation_map = {}
+        for roi in self.rois:
+            filename = os.path.realpath('validation/average_activation_{}.txt'.format(roi))
+            activation_list = np.loadtxt(filename).astype(np.float32)
+            assert activation_list.shape == (907, ), "activation_list length is {}, different from expected 907.".format(activation_list.shape)
+            self.roi_activation_map[roi] = activation_list
 
     def __len__(self):
         return len(self.image_ids) * len(self.rois)
@@ -311,9 +317,7 @@ class Custom_Dataset(Dataset):
         input_np = np.concatenate((self.fmaps[image_ind], one_hot_np(len(self.rois), roi_id))).astype(np.float32)
         input = torch.from_numpy(input_np)
         # fetch the label of this image
-        filename = os.path.realpath('validation/average_activation_{}.txt'.format(roi))
-        activation_list = np.loadtxt(filename).astype(np.float32)
-        label = torch.tensor(activation_list[image_ind])
+        label = torch.tensor(self.roi_activation_map[roi][image_ind])
         return input, label
 
 # find the newest cv folder, run the CV on the model described in description
@@ -372,10 +376,14 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
         with torch.no_grad():
             for X,y in dataloader:
                 pred = model(X)
-                predictions.append(pred)
-                labels.append(y)
+                for i in pred.numpy().astype(np.float):
+                    predictions.append(i)
+                for i in y.numpy().astype(np.float):
+                    labels.append(i)
                 test_loss.append(loss_fn(pred, y).item())
-        return np.mean(test_loss), np.corrcoef(predictions, labels)
+        corrcoef_matrix = np.corrcoef(np.array(predictions).astype(np.float32), np.array(labels).astype(np.float32))
+        assert corrcoef_matrix.shape == (2, 2), "{}".format(corrcoef_matrix)
+        return np.mean(test_loss), corrcoef_matrix[1,0]
 
     error_list = []
     # CV itself
@@ -387,8 +395,8 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
         train_set_torch = Custom_Dataset(train_set)
 
         # create the loader
-        test_loader = DataLoader(test_set_torch, shuffle=True, batch_size=64)
-        train_loader = DataLoader(train_set_torch)
+        test_loader = DataLoader(test_set_torch)
+        train_loader = DataLoader(train_set_torch, shuffle=True, batch_size = 64)
 
         # train the model (from PyTorch tutorial)
         model = Average_Model()
@@ -454,8 +462,8 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
     plt.legend()
     save_plot("avg_mse_curve.png", custom_path=filename)
 
-    plt.plot(test_points, avg_train_r_list, label="Avg. Training MSE")
-    plt.plot(test_points, avg_test_r_list, label ="Avg. Testing MSE")
+    plt.plot(test_points, avg_train_r_list, label="Avg. Training r")
+    plt.plot(test_points, avg_test_r_list, label ="Avg. Testing r")
     # plot the models' progression over time for all folds
     plt.xlabel("Epoch")
     plt.ylabel("Pearson's r")
