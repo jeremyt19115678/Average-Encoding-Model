@@ -403,6 +403,8 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
         loss_fn = nn.MSELoss()
         if optimizer_type == "SGD":
             optim = torch.optim.SGD(model.parameters(), lr=learning_rate)
+        if optimizer_type == "Adam":
+            optim = torch.optim.Adam(model.parameters(), lr=learning_rate)
         test_points = np.linspace(0, epoch, num=min(25, epoch), endpoint = False).astype(int)[1:]
         mse_dict = {}
         for i in range(epoch):
@@ -448,8 +450,8 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
     all_folds_test_r  = np.array([i['test_r'] for i in error_list])
     avg_train_error_list = [np.mean(all_folds_train_error[:,i]) for i in range(all_folds_train_error.shape[1])]
     avg_test_error_list  = [np.mean(all_folds_test_error [:,i]) for i in range(all_folds_test_error.shape [1])]
-    avg_train_r_list = [np.mean(all_folds_train_error[:,i]) for i in range(all_folds_train_r.shape[1])]
-    avg_test_r_list  = [np.mean(all_folds_test_error [:,i]) for i in range(all_folds_test_r.shape [1])]
+    avg_train_r_list = [np.mean(all_folds_train_r[:,i]) for i in range(all_folds_train_r.shape[1])]
+    avg_test_r_list  = [np.mean(all_folds_test_r [:,i]) for i in range(all_folds_test_r.shape [1])]
 
     test_points = np.append(test_points, epoch - 1)
     test_points += 1
@@ -467,6 +469,6 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
     # plot the models' progression over time for all folds
     plt.xlabel("Epoch")
     plt.ylabel("Pearson's r")
-    plt.title("Average Pearson's Correlation over Time")
+    plt.title("Average Pearson's Correlation over Time ({}, lr={})".format(optimizer_type, learning_rate))
     plt.legend()
     save_plot("avg_r_curve.png", custom_path=filename)

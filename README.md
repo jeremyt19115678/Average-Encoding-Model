@@ -58,4 +58,6 @@ Note that the `validation` folder holds the validation/test set (**the precise u
     | mTLwords  | 3                                  |
     
     The data in the `validation` folders are the mean activation among those subjects that do have the certain ROI.  
-- Pearson Correlation and violin plot. Status **INCOMPLETE**.
+- Pearson Correlation and violin plot. Status: **Partially complete.**. Can now plot pearson correlation over epoch.
+- Optimize with Pearson Correlation instead of MSE. Status: **INCOMPLETE**.
+- Use Neurogen's fwrf model to test for baseline correlation. Status: **INCOMPLETE**.
