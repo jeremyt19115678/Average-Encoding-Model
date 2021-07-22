@@ -267,11 +267,11 @@ class Average_Model(nn.Module):
     def __init__(self):
         super(Average_Model, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(9216 + 28, 4096),
+            nn.Linear(9216 + 28, 512),
             nn.ReLU(),
-            nn.Linear(4096, 1000),
+            nn.Linear(512, 128),
             nn.ReLU(),
-            nn.Linear(1000, 1)
+            nn.Linear(128, 1)
         )
     
     def forward(self, x):
@@ -319,11 +319,11 @@ class Custom_Dataset(Dataset):
 # find the newest cv folder, run the CV on the model described in description
 # get the MSE and save description
 def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
-    description = "This is a CV on a NN with 9216+28 input dimension, \
-                two hidden layer with 4096 and 1000 neurons, respectively, \
-                and one single output. The 9216 of the input comes from the \
-                output of the last convolutional layer of AlexNet, and the \
-                remaining 28 is an one-hot encoding of the ROI of interest."
+    description = "This is a CV on a NN with 9216+28 input dimension, " + \
+                "two hidden layer with 512 and 128 neurons, respectively, " + \
+                "and one single output. The 9216 of the input comes from the " + \
+                "output of the last convolutional layer of AlexNet, and the " + \
+                "remaining 28 is an one-hot encoding of the ROI of interest."
 
     # find the oldest CV folder
     directory_str = os.path.realpath('experiments')
@@ -367,16 +367,20 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
             optimizer.step()
     def test(dataloader, model, loss_fn):
         test_loss = []
+        predictions = []
+        labels = []
         with torch.no_grad():
             for X,y in dataloader:
                 pred = model(X)
+                predictions.append(pred)
+                labels.append(y)
                 test_loss.append(loss_fn(pred, y).item())
-        return np.mean(test_loss)
+        return np.mean(test_loss), np.corrcoef(predictions, labels)
 
     error_list = []
     # CV itself
     for partition_num, partition in enumerate(cv_info['partitions']):
-        print("Training fold {}".format(partition_num))
+        print("Training fold {}".format(partition_num + 1))
         test_set = partition['test']
         train_set = partition['train']
         test_set_torch = Custom_Dataset(test_set)
@@ -397,19 +401,28 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
             train(train_loader, model, loss_fn, optim)
             # evaluate the model every once in a while and save it
             if i in test_points:
-                test_error = test(test_loader, model, loss_fn)
-                train_error= test(train_loader,model, loss_fn)
-                print("Epoch: {} / {}\tTrain MSE: {}\tTest MSE: {}".format(i + 1, epoch, round(train_error, 4), round(test_error, 4)))
+                test_error, test_r = test(test_loader, model, loss_fn)
+                train_error,train_r= test(train_loader,model, loss_fn)
+                print("Epoch: {} / {}\tTrain MSE: {}\tTrain r: {}\tTest MSE: {}\tTest r: {}".format(i + 1, epoch, round(train_error, 4), round(train_r, 4), round(test_error, 4), round(test_r, 4)))
                 new_test_list = mse_dict.get('test', [])
                 new_test_list.append(test_error)
+                new_test_r_list = mse_dict.get('test_r', [])
+                new_test_r_list.append(test_r)
                 new_train_list = mse_dict.get('train', [])
                 new_train_list.append(train_error)
+                new_train_r_list = mse_dict.get('train_r', [])
+                new_train_r_list.append(train_r)
                 mse_dict['test'] = new_test_list
                 mse_dict['train']= new_train_list
+                mse_dict['test_r']=new_test_r_list
+                mse_dict['train_r']=new_train_r_list
         final_test_error, final_train_error = test(test_loader, model, loss_fn), test(train_loader, model, loss_fn)
-        print("Final model MSE:: {}".format(test(test_loader, model, loss_fn)))
-        mse_dict['test'].append(final_test_error)
-        mse_dict['train'].append(final_train_error)
+        print("Final Test MSE:: {}\tTest r:: {}".format(*final_test_error))
+        print("Final Train MSE:: {}\tTest r:: {}".format(*final_train_error))
+        mse_dict['test'].append(final_test_error[0])
+        mse_dict['train'].append(final_train_error[0])
+        mse_dict['test_r'].append(final_test_error[1])
+        mse_dict['train_r'].append(final_train_error[1])
         error_list.append(mse_dict)
 
     # write back to about.json
@@ -423,9 +436,14 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
     # plot the progress from error_list
     all_folds_train_error = np.array([i['train'] for i in error_list])
     all_folds_test_error  = np.array([i['test'] for i in error_list])
+    all_folds_train_r = np.array([i['train_r'] for i in error_list])
+    all_folds_test_r  = np.array([i['test_r'] for i in error_list])
     avg_train_error_list = [np.mean(all_folds_train_error[:,i]) for i in range(all_folds_train_error.shape[1])]
     avg_test_error_list  = [np.mean(all_folds_test_error [:,i]) for i in range(all_folds_test_error.shape [1])]
+    avg_train_r_list = [np.mean(all_folds_train_error[:,i]) for i in range(all_folds_train_r.shape[1])]
+    avg_test_r_list  = [np.mean(all_folds_test_error [:,i]) for i in range(all_folds_test_r.shape [1])]
 
+    test_points = np.append(test_points, epoch - 1)
     test_points += 1
     plt.plot(test_points, avg_train_error_list, label="Avg. Training MSE")
     plt.plot(test_points, avg_test_error_list, label ="Avg. Testing MSE")
@@ -434,4 +452,13 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
     plt.ylabel("MSE")
     plt.title("Average Training/Testing MSE over Time")
     plt.legend()
-    save_plot(custom_path=os.path.join(filename, "avg_progress.png"))
+    save_plot("avg_mse_curve.png", custom_path=filename)
+
+    plt.plot(test_points, avg_train_r_list, label="Avg. Training MSE")
+    plt.plot(test_points, avg_test_r_list, label ="Avg. Testing MSE")
+    # plot the models' progression over time for all folds
+    plt.xlabel("Epoch")
+    plt.ylabel("Pearson's r")
+    plt.title("Average Pearson's Correlation over Time")
+    plt.legend()
+    save_plot("avg_r_curve.png", custom_path=filename)
