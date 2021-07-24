@@ -322,7 +322,7 @@ class Custom_Dataset(Dataset):
 
 # find the newest cv folder, run the CV on the model described in description
 # get the MSE and save description
-def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
+def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200):
     description = "This is a CV on a NN with 9216+28 input dimension, " + \
                 "two hidden layer with 512 and 128 neurons, respectively, " + \
                 "and one single output. The 9216 of the input comes from the " + \
