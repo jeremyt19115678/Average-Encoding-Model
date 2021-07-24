@@ -428,7 +428,7 @@ def run_k_fold_cv(optimizer_type = "SGD", learning_rate = 0.001, epoch = 1000):
                 mse_dict['train_r']=new_train_r_list
         final_test_error, final_train_error = test(test_loader, model, loss_fn), test(train_loader, model, loss_fn)
         print("Final Test MSE:: {}\tTest r:: {}".format(*final_test_error))
-        print("Final Train MSE:: {}\tTest r:: {}".format(*final_train_error))
+        print("Final Train MSE:: {}\tTrain r:: {}".format(*final_train_error))
         mse_dict['test'].append(final_test_error[0])
         mse_dict['train'].append(final_train_error[0])
         mse_dict['test_r'].append(final_test_error[1])
