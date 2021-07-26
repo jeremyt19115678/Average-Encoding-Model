@@ -322,7 +322,7 @@ class Custom_Dataset(Dataset):
 
 # find the newest cv folder, run the CV on the model described in description
 # get the MSE and save description
-def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200):
+def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE"):
     description = "This is a CV on a NN with 9216+28 input dimension, " + \
                 "two hidden layer with 512 and 128 neurons, respectively, " + \
                 "and one single output. The 9216 of the input comes from the " + \
@@ -360,16 +360,33 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using {} device".format(device))
 
+    def r_loss(prediction, label):
+        def cov(x, y):
+            assert x.size() == y.size() and len(tuple(x.size())) == len(tuple(y.size())) == 1, "Size {} and {} either mismatch or is not 1D.".format(x.size(), y.size())
+            n = x.size()[0]
+            x_mean, y_mean = torch.mean(x), torch.mean(y)
+            return torch.dot(x - x_mean, y - y_mean) / (n - 1)
+        return (-cov(prediction, label)) / torch.sqrt(cov(prediction, prediction)).item() / torch.sqrt(cov(label, label)).item()
+
     # functions to be called during training and testing
-    def train(dataloader, model, loss_fn, optimizer):
+    def train(dataloader, model, loss_type, optimizer):
+        if loss_type == "MSE":
+            loss_fn = nn.MSELoss()
+        elif loss_type == "r":
+            loss_fn = r_loss
         for batch, (X, y) in enumerate(dataloader):
+            if loss_type == "r" and tuple(y.shape)[0] <= 1:
+                print("Skipping batch of X, y of size {}, {}.".format(X.shape, y.shape))
+                continue
             X, y = X.to(device), y.to(device)
             pred = model(X)
             loss = loss_fn(pred, y)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-    def test(dataloader, model, loss_fn):
+
+    def test(dataloader, model):
+        loss_fn = nn.MSELoss()
         test_loss = []
         predictions = []
         labels = []
@@ -400,19 +417,21 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200)
 
         # train the model (from PyTorch tutorial)
         model = Average_Model()
-        loss_fn = nn.MSELoss()
+        if not loss_type == "MSE" and not loss_type == "r":
+            print("Unknown type of loss. Please try either 'MSE' or 'r'.")
+            return
         if optimizer_type == "SGD":
             optim = torch.optim.SGD(model.parameters(), lr=learning_rate)
         if optimizer_type == "Adam":
             optim = torch.optim.Adam(model.parameters(), lr=learning_rate)
-        test_points = np.linspace(0, epoch, num=min(25, epoch), endpoint = False).astype(int)[1:]
+        test_points = np.linspace(0, epoch, num=min(25, epoch), endpoint = False).astype(int)
         mse_dict = {}
         for i in range(epoch):
-            train(train_loader, model, loss_fn, optim)
+            train(train_loader, model, loss_type, optim)
             # evaluate the model every once in a while and save it
             if i in test_points:
-                test_error, test_r = test(test_loader, model, loss_fn)
-                train_error,train_r= test(train_loader,model, loss_fn)
+                test_error, test_r = test(test_loader, model)
+                train_error,train_r= test(train_loader,model)
                 print("Epoch: {} / {}\tTrain MSE: {}\tTrain r: {}\tTest MSE: {}\tTest r: {}".format(i + 1, epoch, round(train_error, 4), round(train_r, 4), round(test_error, 4), round(test_r, 4)))
                 new_test_list = mse_dict.get('test', [])
                 new_test_list.append(test_error)
@@ -426,7 +445,7 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200)
                 mse_dict['train']= new_train_list
                 mse_dict['test_r']=new_test_r_list
                 mse_dict['train_r']=new_train_r_list
-        final_test_error, final_train_error = test(test_loader, model, loss_fn), test(train_loader, model, loss_fn)
+        final_test_error, final_train_error = test(test_loader, model), test(train_loader, model)
         print("Final Test MSE:: {}\tTest r:: {}".format(*final_test_error))
         print("Final Train MSE:: {}\tTrain r:: {}".format(*final_train_error))
         mse_dict['test'].append(final_test_error[0])
@@ -460,7 +479,7 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200)
     # plot the models' progression over time for all folds
     plt.xlabel("Epoch")
     plt.ylabel("MSE")
-    plt.title("Average Training/Testing MSE over Time")
+    plt.title("Average Training/Testing MSE over Time ({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
     plt.legend()
     save_plot("avg_mse_curve.png", custom_path=filename)
 
@@ -469,6 +488,6 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200)
     # plot the models' progression over time for all folds
     plt.xlabel("Epoch")
     plt.ylabel("Pearson's r")
-    plt.title("Average Pearson's Correlation over Time ({}, lr={})".format(optimizer_type, learning_rate))
+    plt.title("Average Pearson's Correlation over Time ({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
     plt.legend()
     save_plot("avg_r_curve.png", custom_path=filename)

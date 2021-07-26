@@ -59,6 +59,6 @@ Note that the `validation` folder holds the validation/test set (**the precise u
     
     The data in the `validation` folders are the mean activation among those subjects that do have the certain ROI.  
 - Pearson Correlation and violin plot. Status: **Partially complete.**. Can now plot pearson correlation over epoch.
-- Investigate why correlation and MSE is sometimes nan. Status: **INCOMPLETE**.
-- Optimize with Pearson Correlation instead of MSE. Status: **INCOMPLETE**.
+- Investigate why correlation and MSE is sometimes nan. Status: **INCOMPLETE**.  
+- Optimize with Pearson Correlation instead of MSE. Status: **PARTIALLY COMPLETED**. Added option to use Pearson correlation as the loss function. However, just using Pearson Correlation blows up the output (MSE would become huge). Some regularization is needed.  
 - Use Neurogen's fwrf model to test for baseline correlation. Status: **Partially Complete**. Relevant code are in `baseline.py` and `baseline`. The code in `baseline` are minimally edited code from Zijin's NeuroGen. `baseline.py` still needs to map from ROI to the index of the fwRF model output.
