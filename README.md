@@ -61,4 +61,36 @@ Note that the `validation` folder holds the validation/test set (**the precise u
 - Pearson Correlation and violin plot. Status: **Partially complete.**. Can now plot pearson correlation over epoch.
 - Investigate why correlation and MSE is sometimes nan. Status: **INCOMPLETE**.  
 - Optimize with Pearson Correlation instead of MSE. Status: **PARTIALLY COMPLETED**. Added option to use Pearson correlation as the loss function. However, just using Pearson Correlation blows up the output (MSE would become huge). Some regularization is needed.  
-- Use Neurogen's fwrf model to test for baseline correlation. Status: **Partially Complete**. Relevant code are in `baseline.py` and `baseline`. The code in `baseline` are minimally edited code from Zijin's NeuroGen. `baseline.py` still needs to map from ROI to the index of the fwRF model output.
+- Use Neurogen's fwrf model to test for baseline correlation. Status: **Completed**. Relevant code are in `baseline_exp.py` and `baseline`. The code in `baseline` are minimally edited code from Zijin's NeuroGen. The results obtained is shown below:
+    | ROI           | Activation  |
+    |---------------|-------------|
+    | EBA           | 0.745624448 |
+    | FBA1          | 0.560971152 |
+    | FBA2          | 0.717303066 |
+    | FFA1          | 0.762078177 |
+    | FFA2          | 0.754860623 |
+    | L_amygdala    | N/A         |
+    | L_hippocampus | N/A         |
+    | OFA           | 0.698782423 |
+    | OPA           | 0.729941226 |
+    | OWFA          | 0.620909915 |
+    | PPA           | 0.820451649 |
+    | RSC           | 0.773951489 |
+    | R_amygdala    | N/A         |
+    | R_hippocampus | N/A         |
+    | V1d           | 0.861181372 |
+    | V1v           | 0.879067739 |
+    | V2d           | 0.772756183 |
+    | V2v           | 0.850069941 |
+    | V3d           | 0.733561857 |
+    | V3v           | 0.785885334 |
+    | VWFA1         | 0.539793891 |
+    | VWFA2         | 0.573723877 |
+    | aTLfaces      | 0.620114526 |
+    | hV4           | 0.728416874 |
+    | mTLbodies     | 0.368583526 |
+    | mTLfaces      |  0.44080768 |
+    | mTLwords      | 0.428752137 |
+    | mfswords      | 0.517553413 |
+
+    If we count the predicted activation for regions that fwRF can't handle as 0 (divide by 28, the number of regions), the mean correlation would be about 0.582. However, if we only look at the regions for which the fwRF model can predict (24 of them), the mean correlation would be about 0.679.

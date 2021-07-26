@@ -8,8 +8,22 @@ from main import get_ROIs
 # TODO: INCOMPLETE!!!
 # maps roi to the index
 # returns None if the subj does not have the roi
-def roi_to_index(subj, roi):
-    return 0
+def roi_to_index(subj, roi_str):
+    all_ROIs = get_ROIs()
+    maps = [['OFA', 'FFA1', 'FFA2', 'aTLfaces', 'EBA', 'FBA1', 'FBA2', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'mTLwords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4'],
+            ['OFA', 'FFA1', 'FFA2', 'aTLfaces', 'EBA', 'FBA2', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'mTLwords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4'],
+            ['OFA', 'FFA1', 'FFA2', 'aTLfaces', 'EBA', 'FBA1', 'FBA2', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4'],
+            ['OFA', 'FFA1', 'FFA2', 'mTLfaces', 'EBA', 'FBA1', 'FBA2', 'mTLbodies', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'mTLwords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4'],
+            ['OFA', 'FFA1', 'FFA2', 'mTLfaces', 'aTLfaces', 'EBA', 'FBA1', 'FBA2', 'mTLbodies', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'mTLwords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4'],
+            ['OFA', 'FFA1', 'FFA2', 'aTLfaces', 'EBA', 'FBA1', 'FBA2', 'mTLbodies', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'mTLwords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4'],
+            ['OFA', 'FFA1', 'FFA2', 'mTLfaces', 'aTLfaces', 'EBA', 'FBA2', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'mTLwords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4'],
+            ['OFA', 'FFA1', 'FFA2', 'mTLfaces', 'aTLfaces', 'EBA', 'FBA1', 'FBA2', 'mTLbodies', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'mTLwords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4']]
+    for row in maps:
+        for roi in row:
+            assert roi in all_ROIs
+    assert isinstance(subj, int) and 1 <= subj <= 8, "Invalid subject number: {}".format(subj)
+    return maps[subj - 1].index(roi_str) if roi_str in maps[subj-1] else None
+    
 
 def main():
     file = h5py.File(os.path.realpath("validation/shared_images.h5py"), 'r')
@@ -28,7 +42,7 @@ def main():
             subj_activations[roi] = []
         for image in images:
             image_tensor = torch.from_numpy(image.reshape(1, 3, 227, 227))
-            pred = classifier(maps(image_tensor))
+            pred = classifier(maps(image_tensor)).cpu().detach().numpy()
             for roi in ROIs:
                 ind = roi_to_index(i, roi)
                 if ind == None:
@@ -60,9 +74,8 @@ def main():
 
     # get the correlation for each ROI
     for roi in ROIs:
-        print("Correlation for {}: {}".format(roi, np.corrcoef(np.array(avg_predictions[roi]), np.array(avg_activations[roi]))))
+        r_score = np.corrcoef(np.array(avg_predictions[roi]), np.array(avg_activations[roi]))[1, 0]
+        print("Correlation for {}: {}".format(roi, r_score))
 
-'''
 if __name__ == "__main__":
     main()
-'''
