@@ -95,7 +95,7 @@ Note that the `validation` folder holds the validation/test set (**the precise u
 
     If we count the predicted activation for regions that fwRF can't handle as 0 (divide by 28, the number of regions), the mean correlation would be about 0.582. However, if we only look at the regions for which the fwRF model can predict (24 of them), the mean correlation would be about 0.679.  
 
-- Transform to region-specific model instead. Status: **INCOMPLETE**.
+- Transform to region-specific model instead. Status: **In progress**. Added functionality to train region-specific model. Still need to train the model itself and evaluate performance.
 - Consider using feature maps other than AlexNet trained on ImageNet. Status: **INCOMPLETE**.
 - Explore using Linear models. Status: **INCOMPLETE**.
 - Explore optimizing fwRF models. Status: **INCOMPLETE**.

@@ -267,9 +267,9 @@ class Average_Model(nn.Module):
     def __init__(self):
         super(Average_Model, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(9216 + 28, 512),
+            nn.Linear(9216, 256),
             nn.ReLU(),
-            nn.Linear(512, 128),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 1)
         )
@@ -278,7 +278,7 @@ class Average_Model(nn.Module):
         return torch.flatten(self.net(x))
 
 class Custom_Dataset(Dataset):
-    def __init__(self, partition: list):
+    def __init__(self, partition: list, specific_roi: str = None):
         images_path = os.path.realpath('validation/shared_images.h5py')
         assert os.path.exists(images_path)
         # get all the images
@@ -296,7 +296,12 @@ class Custom_Dataset(Dataset):
         # generate one hot from partition, which should be a list of numbers
         assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
         self.image_ids = partition
-        self.rois = get_ROIs()
+        self.specific_roi = specific_roi
+        if self.specific_roi == None:
+            self.rois = get_ROIs()
+        else:
+            assert isinstance(self.specific_roi, str) and self.specific_roi in get_ROIs(), "Invalid ROI: {}".format(self.specific_roi)
+            self.rois = [self.specific_roi]
         self.roi_activation_map = {}
         for roi in self.rois:
             filename = os.path.realpath('validation/average_activation_{}.txt'.format(roi))
@@ -314,7 +319,10 @@ class Custom_Dataset(Dataset):
         roi_id = index % len(self.rois)
         roi = self.rois[roi_id]
         # concatenate the image feature w/ the one hot encoding of roi for the input Tensor
-        input_np = np.concatenate((self.fmaps[image_ind], one_hot_np(len(self.rois), roi_id))).astype(np.float32)
+        if self.specific_roi == None:
+            input_np = np.concatenate((self.fmaps[image_ind], one_hot_np(len(self.rois), roi_id))).astype(np.float32)
+        else:
+            input_np = np.array(self.fmaps[image_ind]).astype(np.float32)
         input = torch.from_numpy(input_np)
         # fetch the label of this image
         label = torch.tensor(self.roi_activation_map[roi][image_ind])
@@ -322,12 +330,15 @@ class Custom_Dataset(Dataset):
 
 # find the newest cv folder, run the CV on the model described in description
 # get the MSE and save description
-def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE"):
-    description = "This is a CV on a NN with 9216+28 input dimension, " + \
-                "two hidden layer with 512 and 128 neurons, respectively, " + \
+def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE", roi = None):
+    description = "This is a CV on a NN with 9216 input dimension, " + \
+                "two hidden layer with 256 and 128 neurons, respectively, " + \
                 "and one single output. The 9216 of the input comes from the " + \
-                "output of the last convolutional layer of AlexNet, and the " + \
-                "remaining 28 is an one-hot encoding of the ROI of interest."
+                "output of the last convolutional layer of AlexNet."
+
+    # assert that roi is okay
+    if roi != None:
+        assert isinstance(roi, str) and roi in get_ROIs(), "Invalid roi: {}".format(roi)
 
     # find the oldest CV folder
     directory_str = os.path.realpath('experiments')
@@ -354,7 +365,8 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
         cv_info = json.load(f)
 
     num_partitions = len(cv_info['partitions'])
-    print("Running {}-fold CV...".format(num_partitions))
+    print("Running {}-fold CV.\nEpoch: {}\nOptimizer: {}\nLR: {}".format(num_partitions, epoch, optimizer_type, learning_rate))
+    print("ROI: {}".format(roi if roi != None else "all"))
 
     # Get cpu or gpu device for training.
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -408,8 +420,8 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
         print("Training fold {}".format(partition_num + 1))
         test_set = partition['test']
         train_set = partition['train']
-        test_set_torch = Custom_Dataset(test_set)
-        train_set_torch = Custom_Dataset(train_set)
+        test_set_torch = Custom_Dataset(test_set, specific_roi=roi)
+        train_set_torch = Custom_Dataset(train_set, specific_roi=roi)
 
         # create the loader
         test_loader = DataLoader(test_set_torch)
@@ -479,7 +491,10 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
     # plot the models' progression over time for all folds
     plt.xlabel("Epoch")
     plt.ylabel("MSE")
-    plt.title("Average Training/Testing MSE over Time ({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
+    if roi == None:
+        plt.title("Average Training/Testing MSE over Time ({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
+    else:
+        plt.title("Average Training/Testing MSE over Time ({}, lr={}, loss={}, roi={})".format(optimizer_type, learning_rate, loss_type, roi))
     plt.legend()
     save_plot("avg_mse_curve.png", custom_path=filename)
 
@@ -488,6 +503,9 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
     # plot the models' progression over time for all folds
     plt.xlabel("Epoch")
     plt.ylabel("Pearson's r")
-    plt.title("Average Pearson's Correlation over Time ({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
+    if roi == None:
+        plt.title("Average Pearson's Correlation over Time ({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
+    else:
+        plt.title("Average Pearson's Correlation over Time ({}, lr={}, loss={}, roi={})".format(optimizer_type, learning_rate, loss_type, roi))
     plt.legend()
     save_plot("avg_r_curve.png", custom_path=filename)
