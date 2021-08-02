@@ -263,22 +263,33 @@ def one_hot_np(length: int, position: int):
     arr[position] = 1
     return np.array(arr)
 
-class Average_Model(nn.Module):
+class Average_Model_NN(nn.Module):
     def __init__(self):
-        super(Average_Model, self).__init__()
+        super(Average_Model_NN, self).__init__()
         self.net = nn.Sequential(
             nn.Linear(9216, 256),
+            #nn.ReLU(),
+            #nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1)
+            nn.Linear(256, 1)
         )
     
     def forward(self, x):
         return torch.flatten(self.net(x))
 
+class Average_Model_Regression(nn.Module):
+    def __init__(self, power: int = 1):
+        super(Average_Model_Regression, self).__init__()
+        assert isinstance(power, int) and power >= 1, "Power has to be an integer >=1."
+        self.lin = nn.Linear(9216 * power + 28, 1)
+
+    def forward(self, x):
+        return torch.flatten(self.lin(x))
+
 class Custom_Dataset(Dataset):
-    def __init__(self, partition: list, specific_roi: str = None):
+    # regression_power = 0 means this dataset is NOT for regression model
+    def __init__(self, partition: list, specific_roi: str = None, regression_power: int = 0):
+        assert isinstance(regression_power, int) and regression_power >= 0, "regression_power has to be greater than or equal to 0"
         images_path = os.path.realpath('validation/shared_images.h5py')
         assert os.path.exists(images_path)
         # get all the images
@@ -292,7 +303,20 @@ class Custom_Dataset(Dataset):
         assert isinstance(readings, torch.Tensor)
         readings = readings.cpu().detach().numpy()
         assert readings.shape[1] == 9216
-        self.fmaps = readings
+        # if this is not a regression dataset
+        if regression_power == 0:
+            self.fmaps = readings
+        else: #this is a regression dataset
+            nth_power_readings = []
+            for reading in readings:
+                original_reading = reading
+                polynomial_input = original_reading
+                for j in range(2, regression_power+1):
+                    nth_power_reading = np.power(original_reading, j)
+                    polynomial_input = np.concatenate((polynomial_input, nth_power_reading))
+                nth_power_readings.append(polynomial_input)
+            self.fmaps = np.array(nth_power_readings)
+
         # generate one hot from partition, which should be a list of numbers
         assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
         self.image_ids = partition
@@ -330,15 +354,20 @@ class Custom_Dataset(Dataset):
 
 # find the newest cv folder, run the CV on the model described in description
 # get the MSE and save description
-def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE", roi = None):
-    description = "This is a CV on a NN with 9216 input dimension, " + \
-                "two hidden layer with 256 and 128 neurons, respectively, " + \
-                "and one single output. The 9216 of the input comes from the " + \
-                "output of the last convolutional layer of AlexNet."
+# regression_power parameter is by default 0, which indicates a NN is being tested
+# if it's any other positive integer, it is a linear regression model
+def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE", roi = None, verbose=True, regression_power = 0):
+    description = "This is a CV on a linear regression model with 9216 * n + 1 input dimension, " + \
+                "where n, is the power to which the independent variables are raised." + \
+                "The 9216 of the input comes from the " + \
+                "output of the last convolutional layer of AlexNet and the 1 is the bias term."
 
     # assert that roi is okay
     if roi != None:
         assert isinstance(roi, str) and roi in get_ROIs(), "Invalid roi: {}".format(roi)
+
+    # assert that the regression_power is okay
+    assert isinstance(regression_power, int) and regression_power >= 0, "Invalid regression_power: has to be integer >= 0."
 
     # find the oldest CV folder
     directory_str = os.path.realpath('experiments')
@@ -367,11 +396,14 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
     num_partitions = len(cv_info['partitions'])
     print("Running {}-fold CV.\nEpoch: {}\nOptimizer: {}\nLR: {}".format(num_partitions, epoch, optimizer_type, learning_rate))
     print("ROI: {}".format(roi if roi != None else "all"))
+    print("Model Type: {}".format("NN" if regression_power == 0 else "Regression (power = {})".format(regression_power)))
 
     # Get cpu or gpu device for training.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using {} device".format(device))
 
+    # using -r as a loss function
+    # most likely not going to be used, as it blows up the weights
     def r_loss(prediction, label):
         def cov(x, y):
             assert x.size() == y.size() and len(tuple(x.size())) == len(tuple(y.size())) == 1, "Size {} and {} either mismatch or is not 1D.".format(x.size(), y.size())
@@ -420,15 +452,18 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
         print("Training fold {}".format(partition_num + 1))
         test_set = partition['test']
         train_set = partition['train']
-        test_set_torch = Custom_Dataset(test_set, specific_roi=roi)
-        train_set_torch = Custom_Dataset(train_set, specific_roi=roi)
+        test_set_torch = Custom_Dataset(test_set, specific_roi=roi, regression_power=regression_power)
+        train_set_torch = Custom_Dataset(train_set, specific_roi=roi, regression_power=regression_power)
 
         # create the loader
         test_loader = DataLoader(test_set_torch)
         train_loader = DataLoader(train_set_torch, shuffle=True, batch_size = 64)
 
         # train the model (from PyTorch tutorial)
-        model = Average_Model()
+        if regression_power == 0: # this indicates we're training an NN
+            model = Average_Model_NN()
+        else:
+            model = Average_Model_Regression(regression_power)
         if not loss_type == "MSE" and not loss_type == "r":
             print("Unknown type of loss. Please try either 'MSE' or 'r'.")
             return
@@ -444,7 +479,8 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
             if i in test_points:
                 test_error, test_r = test(test_loader, model)
                 train_error,train_r= test(train_loader,model)
-                print("Epoch: {} / {}\tTrain MSE: {}\tTrain r: {}\tTest MSE: {}\tTest r: {}".format(i + 1, epoch, round(train_error, 4), round(train_r, 4), round(test_error, 4), round(test_r, 4)))
+                if verbose:
+                    print("Epoch: {} / {}\tTrain MSE: {}\tTrain r: {}\tTest MSE: {}\tTest r: {}".format(i + 1, epoch, round(train_error, 4), round(train_r, 4), round(test_error, 4), round(test_r, 4)))
                 new_test_list = mse_dict.get('test', [])
                 new_test_list.append(test_error)
                 new_test_r_list = mse_dict.get('test_r', [])
@@ -502,7 +538,7 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
     plt.plot(test_points, avg_test_r_list, label ="Avg. Testing r")
     # plot the models' progression over time for all folds
     plt.xlabel("Epoch")
-    plt.ylabel("Pearson's r")
+    plt.ylabel("Pearson's Correlation")
     if roi == None:
         plt.title("Average Pearson's Correlation over Time ({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
     else:
