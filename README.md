@@ -97,5 +97,5 @@ Note that the `validation` folder holds the validation/test set (**the precise u
 
 - Transform to region-specific model instead. Status: **In progress**. Added functionality to train region-specific model. Still need to train the model itself and evaluate performance.
 - Consider using feature maps other than AlexNet trained on ImageNet. Status: **INCOMPLETE**.
-- Explore using Linear models. Status: **INCOMPLETE**.
+- Explore using Linear models. Status: **SOMEWHAT COMPLETED**. Explored linear models on AlexNet 9216 feature maps. Results are poor compared to the neural networks. As the input are raised to higher power, the fit becomes worse in terms of both training and validation dataset.
 - Explore optimizing fwRF models. Status: **INCOMPLETE**.

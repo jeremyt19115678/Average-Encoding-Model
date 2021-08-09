@@ -268,10 +268,10 @@ class Average_Model_NN(nn.Module):
         super(Average_Model_NN, self).__init__()
         self.net = nn.Sequential(
             nn.Linear(9216, 256),
-            #nn.ReLU(),
-            #nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(256, 1)
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
         )
     
     def forward(self, x):
@@ -281,10 +281,75 @@ class Average_Model_Regression(nn.Module):
     def __init__(self, power: int = 1):
         super(Average_Model_Regression, self).__init__()
         assert isinstance(power, int) and power >= 1, "Power has to be an integer >=1."
-        self.lin = nn.Linear(9216 * power + 28, 1)
+        self.lin = nn.Linear(9216 * power, 1)
 
     def forward(self, x):
         return torch.flatten(self.lin(x))
+
+# largely adapted from Zijin's Code in Neurogen
+class Average_Model_fwRF(nn.Module):
+
+    def __init__(self, _fmaps_fn, _nonlinearity=None, input_shape=(1,3,227,227), aperture=1.0, device=torch.device("cpu")):
+        super(Average_Model_fwRF, self).__init__()
+        
+        self.aperture = aperture
+
+        # initialize a tensor of shape (1, 3, 227, 227) of random values from 0-1 (this resembles a picture)
+        # we feed the picture into the _fmaps_fn to get an output to get a list of output of each layer
+        _x = torch.empty((1,)+input_shape[1:], device=device).uniform_(0, 1)
+        _fmaps = _fmaps_fn(_x)
+        self.fmaps_rez = [] # should contain the resolution of the feature maps of each layer
+        num_feature_maps = 0
+        for k,_fm in enumerate(_fmaps):
+            assert _fm.size()[2]==_fm.size()[3], 'All feature maps need to be square'
+            self.fmaps_rez += [_fm.size()[2],]
+            num_feature_maps += _fm.size()[1]
+        # self.fmaps_rez should contain 27, 27, 13, 13, 13, 1, 1, 1 (refer to README)
+
+        # should perhaps be random
+        self.pool_mean_x = nn.Parameter(torch.tensor(0, dtype=torch.float32))
+        self.pool_mean_y = nn.Parameter(torch.tensor(0, dtype=torch.float32))
+        self.pool_variance = nn.Parameter(torch.tensor(1, dtype=torch.float32))
+
+        self.feature_map_weights = nn.Linear(num_feature_maps, 1)
+ 
+    # adopted from Zijin's code
+    # modified slightly with help from the paper by Ghislain St-Yves et al.
+    # "The feature-weighted receptive field: an interpretable encoding model for complex feature spaces"
+    def make_gaussian_mass(self, n_pix):
+        deg = 1.0 # seem to be constant in Zijin's code
+        dpix = deg / n_pix
+        pix_min = -deg/2. + 0.5 * dpix
+        pix_max = deg/2.
+        X_mesh, Y_mesh = np.meshgrid(np.arange(pix_min,pix_max,dpix), np.arange(pix_min,pix_max,dpix))
+        Xm = torch.from_numpy(X_mesh, dtype=torch.float32)
+        Ym = torch.from_numpy(Y_mesh, dtype=torch.float32)
+        # very different from NeuroGen's version, copied from paper
+        if self.pool_variance<=0:
+            Zm = torch.zeros_like(torch.from_numpy(Xm))
+        else:
+            Zm = 1. / torch.sqrt((2*self.pool_variance**2)*np.pi) * torch.exp(-((Xm-self.pool_mean_x)**2 + (-Ym-self.pool_mean_y)**2) / (2*self.pool_variance**2))
+        assert tuple(Zm.shape) == (n_pix, n_pix), "Returned matrix is of size {} when feature map side length is {}.".format(tuple(Zm.shape), n_pix)
+        return Zm
+
+    def forward(self, fmaps):
+        assert len(tuple(fmaps.shape)) == 4 and fmaps.shape[0] == 1, "Need to implement how to deal with batch of images"
+        fmaps = torch.squeeze(fmaps)
+        assert len(tuple(fmaps.shape)) == 3, "fmaps is of {}-D instead of 3-D".format(len(tuple(fmaps.shape)))
+        integrals = []
+        # for each element in the fmaps (represent the pooling field produced by one layer)
+        for layer_num, layer in enumerate(fmaps):
+            # generate the pooling field
+            pooling_field = self.make_gaussian_mass(self.fmaps_rez[layer_num])
+            # for each element in the layer (a single feature map)
+            for fmap in layer:
+                assert len(tuple(fmap.size)) == 2
+                # get the "integral" and append it to a list
+                integral = torch.tensordot(fmap, pooling_field)
+                integrals.append(integral)
+        # get weighted sum of the integrals
+        integrals_tensor = torch.tensor(integrals, dtype=torch.float32)
+        return self.feature_map_weights(integrals_tensor)
 
 class Custom_Dataset(Dataset):
     # regression_power = 0 means this dataset is NOT for regression model
@@ -528,9 +593,9 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
     plt.xlabel("Epoch")
     plt.ylabel("MSE")
     if roi == None:
-        plt.title("Average Training/Testing MSE over Time ({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
+        plt.title("Average Training/Testing MSE over Time\n({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
     else:
-        plt.title("Average Training/Testing MSE over Time ({}, lr={}, loss={}, roi={})".format(optimizer_type, learning_rate, loss_type, roi))
+        plt.title("Average Training/Testing MSE over Time\n({}, lr={}, loss={}, roi={})".format(optimizer_type, learning_rate, loss_type, roi))
     plt.legend()
     save_plot("avg_mse_curve.png", custom_path=filename)
 
@@ -540,8 +605,8 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
     plt.xlabel("Epoch")
     plt.ylabel("Pearson's Correlation")
     if roi == None:
-        plt.title("Average Pearson's Correlation over Time ({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
+        plt.title("Average Pearson's Correlation over Time\n({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
     else:
-        plt.title("Average Pearson's Correlation over Time ({}, lr={}, loss={}, roi={})".format(optimizer_type, learning_rate, loss_type, roi))
+        plt.title("Average Pearson's Correlation over Time\n({}, lr={}, loss={}, roi={})".format(optimizer_type, learning_rate, loss_type, roi))
     plt.legend()
     save_plot("avg_r_curve.png", custom_path=filename)
