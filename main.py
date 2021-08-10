@@ -289,7 +289,7 @@ class Average_Model_Regression(nn.Module):
 # largely adapted from Zijin's Code in Neurogen
 class Average_Model_fwRF(nn.Module):
 
-    def __init__(self, _fmaps_fn, _nonlinearity=None, input_shape=(1,3,227,227), aperture=1.0, device=torch.device("cpu")):
+    def __init__(self, input_shape=(1,3,227,227), aperture=1.0, device=torch.device("cpu")):
         super(Average_Model_fwRF, self).__init__()
         
         self.aperture = aperture
@@ -297,7 +297,9 @@ class Average_Model_fwRF(nn.Module):
         # initialize a tensor of shape (1, 3, 227, 227) of random values from 0-1 (this resembles a picture)
         # we feed the picture into the _fmaps_fn to get an output to get a list of output of each layer
         _x = torch.empty((1,)+input_shape[1:], device=device).uniform_(0, 1)
-        _fmaps = _fmaps_fn(_x)
+        _fmaps_fn = Alexnet_fmaps()
+        all_fmaps = _fmaps_fn(_x)
+        _fmaps = all_fmaps[:5] + all_fmaps[6:]
         self.fmaps_rez = [] # should contain the resolution of the feature maps of each layer
         num_feature_maps = 0
         for k,_fm in enumerate(_fmaps):
@@ -310,8 +312,9 @@ class Average_Model_fwRF(nn.Module):
         self.pool_mean_x = nn.Parameter(torch.tensor(0, dtype=torch.float32))
         self.pool_mean_y = nn.Parameter(torch.tensor(0, dtype=torch.float32))
         self.pool_variance = nn.Parameter(torch.tensor(1, dtype=torch.float32))
+        self.bias = torch.rand(1, requires_grad = True)
 
-        self.feature_map_weights = nn.Linear(num_feature_maps, 1)
+        self.feature_map_weights = torch.rand(num_feature_maps, requires_grad = True)
  
     # adopted from Zijin's code
     # modified slightly with help from the paper by Ghislain St-Yves et al.
@@ -322,34 +325,82 @@ class Average_Model_fwRF(nn.Module):
         pix_min = -deg/2. + 0.5 * dpix
         pix_max = deg/2.
         X_mesh, Y_mesh = np.meshgrid(np.arange(pix_min,pix_max,dpix), np.arange(pix_min,pix_max,dpix))
-        Xm = torch.from_numpy(X_mesh, dtype=torch.float32)
-        Ym = torch.from_numpy(Y_mesh, dtype=torch.float32)
+        Xm = torch.from_numpy(X_mesh.astype(np.float32))
+        Ym = torch.from_numpy(Y_mesh.astype(np.float32))
         # very different from NeuroGen's version, copied from paper
         if self.pool_variance<=0:
             Zm = torch.zeros_like(torch.from_numpy(Xm))
         else:
             Zm = 1. / torch.sqrt((2*self.pool_variance**2)*np.pi) * torch.exp(-((Xm-self.pool_mean_x)**2 + (-Ym-self.pool_mean_y)**2) / (2*self.pool_variance**2))
         assert tuple(Zm.shape) == (n_pix, n_pix), "Returned matrix is of size {} when feature map side length is {}.".format(tuple(Zm.shape), n_pix)
+        if torch.sum(Zm) > 0:
+            return Zm/torch.sum(Zm)
         return Zm
 
     def forward(self, fmaps):
-        assert len(tuple(fmaps.shape)) == 4 and fmaps.shape[0] == 1, "Need to implement how to deal with batch of images"
-        fmaps = torch.squeeze(fmaps)
-        assert len(tuple(fmaps.shape)) == 3, "fmaps is of {}-D instead of 3-D".format(len(tuple(fmaps.shape)))
-        integrals = []
+        integrals = {}
         # for each element in the fmaps (represent the pooling field produced by one layer)
-        for layer_num, layer in enumerate(fmaps):
+        for layer_num, bad_layer in enumerate(fmaps):
             # generate the pooling field
             pooling_field = self.make_gaussian_mass(self.fmaps_rez[layer_num])
-            # for each element in the layer (a single feature map)
-            for fmap in layer:
-                assert len(tuple(fmap.size)) == 2
-                # get the "integral" and append it to a list
-                integral = torch.tensordot(fmap, pooling_field)
-                integrals.append(integral)
+            layer = torch.squeeze(bad_layer, dim=1)
+            # for each element in the layer (the feature maps of a single picture)
+            for image_num, image_fmaps in enumerate(layer):
+                for fmap in image_fmaps:
+                    assert len(tuple(fmap.shape)) == 2, "fmap.shape = {}".format(fmap.shape)
+                    # get the "integral" and append it to a list
+                    integral = torch.tensordot(fmap, pooling_field)
+                    if image_num in integrals:
+                        integrals[image_num].append(integral)
+                    else:
+                        integrals[image_num] = [integral]
+        img_keys = sorted(list(integrals.keys()))
+        integrals_list = [integrals[img_num] for img_num in img_keys]
+        integrals_torch = torch.tensor(integrals_list, dtype=torch.float32)
         # get weighted sum of the integrals
-        integrals_tensor = torch.tensor(integrals, dtype=torch.float32)
-        return self.feature_map_weights(integrals_tensor)
+        return torch.matmul(integrals_torch, self.feature_map_weights) + self.bias
+
+class Custom_Dataset_fwRF(Dataset):
+    # regression_power = 0 means this dataset is NOT for regression model
+    def __init__(self, partition: list, specific_roi: str):
+        images_path = os.path.realpath('validation/shared_images.h5py')
+        assert os.path.exists(images_path)
+        # get all the images
+        image_file = h5py.File(images_path, 'r')
+        all_images = np.copy(image_file['image_data']).astype(np.float32)
+        image_file.close()
+        # convert images into AlexNet readings and save them
+        alexnet = Alexnet_fmaps()
+        readings = []
+        # all_images should be of shape n, 3, 227, 227
+        for image in all_images:
+            image_tensor = torch.from_numpy(image.reshape(1, 3, 227, 227))
+            fmaps = alexnet(image_tensor)
+            readings.append(fmaps[:5] + fmaps[6:]) # skip over the 6th element, which is added for the sake of NN and not previously in fwRF used in neurogen
+        self.fmaps = readings
+        # note the image ids
+        assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
+        self.image_ids = partition
+        # note the roi this fwRF model is for
+        assert isinstance(specific_roi, str) and specific_roi in get_ROIs(), "Invalid ROI: {}".format(specific_roi)
+        self.roi = specific_roi
+        # load in the labels
+        filename = os.path.realpath('validation/average_activation_{}.txt'.format(self.roi))
+        activation_list = np.loadtxt(filename).astype(np.float32)
+        assert activation_list.shape == (907, ), "activation_list length is {}, different from expected 907.".format(activation_list.shape)
+        self.roi_activation_map = activation_list
+
+    def __len__(self):
+        return len(self.image_ids)
+
+    def __getitem__(self, index):
+        # map from index to the id of the image and the roi
+        # get the id of the image
+        image_ind = self.image_ids[index]
+        input = self.fmaps[image_ind]
+        # fetch the label of this image
+        label = torch.tensor(self.roi_activation_map[image_ind])
+        return input, label
 
 class Custom_Dataset(Dataset):
     # regression_power = 0 means this dataset is NOT for regression model
@@ -382,7 +433,6 @@ class Custom_Dataset(Dataset):
                 nth_power_readings.append(polynomial_input)
             self.fmaps = np.array(nth_power_readings)
 
-        # generate one hot from partition, which should be a list of numbers
         assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
         self.image_ids = partition
         self.specific_roi = specific_roi
@@ -421,18 +471,22 @@ class Custom_Dataset(Dataset):
 # get the MSE and save description
 # regression_power parameter is by default 0, which indicates a NN is being tested
 # if it's any other positive integer, it is a linear regression model
+# if it's None, it is a fwRF model
 def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE", roi = None, verbose=True, regression_power = 0):
     description = "This is a CV on a linear regression model with 9216 * n + 1 input dimension, " + \
                 "where n, is the power to which the independent variables are raised." + \
                 "The 9216 of the input comes from the " + \
                 "output of the last convolutional layer of AlexNet and the 1 is the bias term."
 
+    if regression_power == None: # fwRF model must have roi specified
+        assert roi != None
+
     # assert that roi is okay
     if roi != None:
         assert isinstance(roi, str) and roi in get_ROIs(), "Invalid roi: {}".format(roi)
 
     # assert that the regression_power is okay
-    assert isinstance(regression_power, int) and regression_power >= 0, "Invalid regression_power: has to be integer >= 0."
+    assert regression_power == None or (isinstance(regression_power, int) and regression_power >= 0), "Invalid regression_power: has to be integer >= 0 or None."
 
     # find the oldest CV folder
     directory_str = os.path.realpath('experiments')
@@ -461,7 +515,10 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
     num_partitions = len(cv_info['partitions'])
     print("Running {}-fold CV.\nEpoch: {}\nOptimizer: {}\nLR: {}".format(num_partitions, epoch, optimizer_type, learning_rate))
     print("ROI: {}".format(roi if roi != None else "all"))
-    print("Model Type: {}".format("NN" if regression_power == 0 else "Regression (power = {})".format(regression_power)))
+    if regression_power is not None:
+        print("Model Type: {}".format("NN" if regression_power == 0 else "Regression (power = {})".format(regression_power)))
+    else:
+        print("Model Type: fwRF")
 
     # Get cpu or gpu device for training.
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -487,7 +544,10 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
             if loss_type == "r" and tuple(y.shape)[0] <= 1:
                 print("Skipping batch of X, y of size {}, {}.".format(X.shape, y.shape))
                 continue
-            X, y = X.to(device), y.to(device)
+            if regression_power is not None:
+                X, y = X.to(device), y.to(device)
+            else:
+                y = y.to(device)
             pred = model(X)
             loss = loss_fn(pred, y)
             optimizer.zero_grad()
@@ -517,15 +577,21 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
         print("Training fold {}".format(partition_num + 1))
         test_set = partition['test']
         train_set = partition['train']
-        test_set_torch = Custom_Dataset(test_set, specific_roi=roi, regression_power=regression_power)
-        train_set_torch = Custom_Dataset(train_set, specific_roi=roi, regression_power=regression_power)
+        if regression_power is not None:
+            test_set_torch = Custom_Dataset(test_set, specific_roi=roi, regression_power=regression_power)
+            train_set_torch = Custom_Dataset(train_set, specific_roi=roi, regression_power=regression_power)
+        else:
+            test_set_torch = Custom_Dataset_fwRF(test_set, roi)
+            train_set_torch = Custom_Dataset_fwRF(train_set, roi)
 
         # create the loader
         test_loader = DataLoader(test_set_torch)
         train_loader = DataLoader(train_set_torch, shuffle=True, batch_size = 64)
 
         # train the model (from PyTorch tutorial)
-        if regression_power == 0: # this indicates we're training an NN
+        if regression_power == None:
+            model = Average_Model_fwRF()
+        elif regression_power == 0: # this indicates we're training an NN
             model = Average_Model_NN()
         else:
             model = Average_Model_Regression(regression_power)
