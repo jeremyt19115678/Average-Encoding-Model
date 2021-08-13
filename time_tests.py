@@ -3,7 +3,9 @@ import torch
 import h5py
 import os
 import numpy as np
-from main import get_ROIs
+from main import get_ROIs, Average_Model_NN
+import time
+from alexnet import Alexnet_fmaps
 
 # maps roi to the index
 # returns None if the subj does not have the roi
@@ -23,13 +25,13 @@ def roi_to_index(subj, roi_str):
     assert isinstance(subj, int) and 1 <= subj <= 8, "Invalid subject number: {}".format(subj)
     return maps[subj - 1].index(roi_str) if roi_str in maps[subj-1] else None
     
-
-def main():
+def time_fwRF(specific_roi):
     file = h5py.File(os.path.realpath("validation/shared_images.h5py"), 'r')
     images = np.copy(file['image_data']).astype(np.float32)
     file.close()
     all_activations = []
-    ROIs = get_ROIs()
+    ROIs = [specific_roi]
+    begin_time = time.time()
     for i in range(1, 9):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         classifier, maps = load_encoding(subject=i, model_name='dnn_fwrf', device=device)
@@ -48,8 +50,6 @@ def main():
                     subj_activations[roi].append(np.NAN)
                 else:
                     subj_activations[roi].append(pred[ind])
-        for acts in subj_activations.values():
-            assert len(acts) == len(images)
         all_activations.append(subj_activations)
     
     # get the average predictions for each ROI
@@ -62,19 +62,28 @@ def main():
         avg_predictions[roi] = prediction
     for preds in avg_predictions.values():
         assert len(preds) == len(images)
-    
-    # get the average activation for each ROI
-    avg_activations = {}
-    for roi in ROIs:
-        filename = os.path.realpath('validation/average_activation_{}.txt'.format(roi))
-        activation_list = np.loadtxt(filename).astype(np.float32)
-        assert activation_list.shape == (907, ), "activation_list length is {}, different from expected 907.".format(activation_list.shape)
-        avg_activations[roi] = activation_list
+    end_time = time.time()
+    return end_time - begin_time, avg_predictions
 
-    # get the correlation for each ROI
+def time_ANN(specific_roi):
+    file = h5py.File(os.path.realpath("validation/shared_images.h5py"), 'r')
+    images = np.copy(file['image_data']).astype(np.float32)
+    file.close()
+    ROIs = [specific_roi]
+    begin_time = time.time()
+    avg_predictions = {}
+    alexnet = Alexnet_fmaps()
     for roi in ROIs:
-        r_score = np.corrcoef(np.array(avg_predictions[roi]), np.array(avg_activations[roi]))[1, 0]
-        print("Correlation for {}: {}".format(roi, r_score))
-
-if __name__ == "__main__":
-    main()
+        roi_activations = []
+        # load the model
+        model = Average_Model_NN()
+        model.load_state_dict(torch.load(os.path.abspath('models/NN_model_params_{}.pt'.format(roi))))
+        model.eval()
+        for image in images:
+            image_tensor = torch.from_numpy(image.reshape(1, 3, 227, 227))
+            pred = model(alexnet(image_tensor)[5])
+            roi_activations.append(pred.cpu().detach().numpy()[0])
+        # add entry into avg_predictions
+        avg_predictions[roi] = roi_activations
+    end_time = time.time()
+    return end_time - begin_time, avg_predictions
