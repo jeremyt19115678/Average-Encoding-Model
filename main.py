@@ -289,10 +289,20 @@ class Average_Model_Regression(nn.Module):
 # largely adapted from Zijin's Code in Neurogen
 class Average_Model_fwRF(nn.Module):
 
+    '''
+    Post-condition: 
+    self.aperature is just adapted from code from neurogen, i don't get what this does
+    self.fmaps_rez is of type List and its elements (of some numerical type) are the side lengths
+                   of the layers in the feature maps
+    self.pool_mean_x and self.pool_mean_y is the center of the Gaussian pooling field (should be a PyTorch parameter so autograd is possible)
+    self.pool_variance is also used to generate the Gaussian pooling field (PyTorch parameter for autograd)
+    self.feature_map_weights is also a Pytorch tensor with autograd enabled, used in the linear combination of the feature maps (after the pooling field)
+    self.bias is the bias that will be added at the end of the linear combination (PyTorch parameter for autograd)
+    '''
     def __init__(self, input_shape=(1,3,227,227), aperture=1.0, device=torch.device("cpu")):
         super(Average_Model_fwRF, self).__init__()
         
-        self.aperture = aperture
+        self.aperture = aperture # I don't really get what this does
 
         # initialize a tensor of shape (1, 3, 227, 227) of random values from 0-1 (this resembles a picture)
         # we feed the picture into the _fmaps_fn to get an output to get a list of output of each layer
@@ -327,7 +337,7 @@ class Average_Model_fwRF(nn.Module):
         X_mesh, Y_mesh = np.meshgrid(np.arange(pix_min,pix_max,dpix), np.arange(pix_min,pix_max,dpix))
         Xm = torch.from_numpy(X_mesh.astype(np.float32))
         Ym = torch.from_numpy(Y_mesh.astype(np.float32))
-        # very different from NeuroGen's version, copied from paper
+        # very different from NeuroGen's version, based off of the paper
         if self.pool_variance<=0:
             Zm = torch.zeros_like(torch.from_numpy(Xm))
         else:
@@ -337,6 +347,13 @@ class Average_Model_fwRF(nn.Module):
             return Zm/torch.sum(Zm)
         return Zm
 
+    # first calculate the "integrals" of each picture
+    # each picture generates a bunch of feature maps in each layer of AlexNet, and these feature maps (basically a matrix)
+    # are "dotted" (summed the products of corresponding entries) with the gaussian pooling field (generated using
+    # self.pool_variance, self.pool_mean_x, and self.pool_mean_y)
+    # each of these feature maps after being dotted would generate a single scalar, which is then weighted by 
+    # self.feature_map_weights then summed together (resulting in a linear combination of the feature maps' dot products)
+    # this linear combination added with self.bias is the result of a single "forward" pass.
     def forward(self, fmaps):
         integrals = {}
         # for each element in the fmaps (represent the pooling field produced by one layer)
@@ -472,7 +489,7 @@ class Custom_Dataset(Dataset):
 # regression_power parameter is by default 0, which indicates a NN is being tested
 # if it's any other positive integer, it is a linear regression model
 # if it's None, it is a fwRF model
-def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE", roi = None, verbose=True, regression_power = 0):
+def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE", roi = None, verbose=True, regression_power = 0, save = False):
     description = "This is a CV on a linear regression model with 9216 * n + 1 input dimension, " + \
                 "where n, is the power to which the independent variables are raised." + \
                 "The 9216 of the input comes from the " + \
@@ -516,8 +533,10 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
     print("Running {}-fold CV.\nEpoch: {}\nOptimizer: {}\nLR: {}".format(num_partitions, epoch, optimizer_type, learning_rate))
     print("ROI: {}".format(roi if roi != None else "all"))
     if regression_power is not None:
+        model_type = "NN" if regression_power == 0 else "regression-{}".format(regression_power)
         print("Model Type: {}".format("NN" if regression_power == 0 else "Regression (power = {})".format(regression_power)))
     else:
+        model_type = "fwRF"
         print("Model Type: fwRF")
 
     # Get cpu or gpu device for training.
@@ -534,6 +553,9 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
             return torch.dot(x - x_mean, y - y_mean) / (n - 1)
         return (-cov(prediction, label)) / torch.sqrt(cov(prediction, prediction)).item() / torch.sqrt(cov(label, label)).item()
 
+    def ridge_regression_loss(prediction, label, regularization_constant, model):
+        return torch.mean(torch.pow(prediction - label, 2)) + regularization_constant * (torch.sum(model.feature_map_weights) + model.bias)
+
     # functions to be called during training and testing
     def train(dataloader, model, loss_type, optimizer):
         if loss_type == "MSE":
@@ -549,7 +571,10 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
             else:
                 y = y.to(device)
             pred = model(X)
-            loss = loss_fn(pred, y)
+            if loss_type == "MSE" or loss_type == "r":
+                loss = loss_fn(pred, y)
+            elif regression_power == None:
+                loss = ridge_regression_loss(pred, y, regularization_constant, model)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -572,6 +597,7 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
         return np.mean(test_loss), corrcoef_matrix[1,0]
 
     error_list = []
+    state_dicts = []
     # CV itself
     for partition_num, partition in enumerate(cv_info['partitions']):
         print("Training fold {}".format(partition_num + 1))
@@ -632,7 +658,10 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
         mse_dict['test_r'].append(final_test_error[1])
         mse_dict['train_r'].append(final_train_error[1])
         error_list.append(mse_dict)
-
+        # save the models if needed
+        if save == True:
+            state_dicts.append(model.state_dict())
+    
     # write back to about.json
     with open(os.path.join(filename, "about.json"), 'w') as f:
         cv_info['completed'] = True
@@ -640,6 +669,15 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
         cv_info['errors'] = error_list
         f.write(json.dumps(cv_info))
     print("Updated about.json.")
+
+    # find the fold with the lowest test r and save it
+    if save == True:
+        test_rs = [dic['test_r'][-1] for dic in error_list]
+        best_fold = test_rs.index(max(test_rs))
+        model_file_name = "{}_model_params_{}.pt".format(model_type, roi if roi is not None else "general")
+        model_file_path = os.path.join(filename, model_file_name)
+        torch.save(state_dicts[best_fold], model_file_path)
+        print("The best model of fold {} with a test r of {} should be saved at: {}".format(best_fold + 1, max(test_rs), model_file_path))
 
     # plot the progress from error_list
     all_folds_train_error = np.array([i['train'] for i in error_list])
