@@ -12,6 +12,7 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from alexnet import Alexnet_fmaps
+from scipy.special import erf
 
 # return the arguments
 def get_args():
@@ -286,6 +287,9 @@ class Average_Model_Regression(nn.Module):
     def forward(self, x):
         return torch.flatten(self.lin(x))
 
+def gaussian_mass(x, y, dx, dy, x_mean, y_mean, sigma):
+    return 0.25*(erf((x+dx/2-x_mean)/(np.sqrt(2)*sigma)) - erf((x-dx/2-x_mean)/(np.sqrt(2)*sigma))) * (erf((y+dy/2-y_mean)/(np.sqrt(2)*sigma)) - erf((y-dy/2-y_mean)/(np.sqrt(2)*sigma)))
+
 # largely adapted from Zijin's Code in Neurogen
 class Average_Model_fwRF(nn.Module):
 
@@ -299,7 +303,7 @@ class Average_Model_fwRF(nn.Module):
     self.feature_map_weights is also a Pytorch tensor with autograd enabled, used in the linear combination of the feature maps (after the pooling field)
     self.bias is the bias that will be added at the end of the linear combination (PyTorch parameter for autograd)
     '''
-    def __init__(self, input_shape=(1,3,227,227), aperture=1.0, device=torch.device("cpu")):
+    def __init__(self, x = 0, y = 0, sigma = 1, input_shape=(1,3,227,227), aperture=1.0, device=torch.device("cpu")):
         super(Average_Model_fwRF, self).__init__()
         
         self.aperture = aperture # I don't really get what this does
@@ -319,9 +323,9 @@ class Average_Model_fwRF(nn.Module):
         # self.fmaps_rez should contain 27, 27, 13, 13, 13, 1, 1, 1 (refer to README)
 
         # should perhaps be random
-        self.pool_mean_x = nn.Parameter(torch.tensor(0, dtype=torch.float32))
-        self.pool_mean_y = nn.Parameter(torch.tensor(0, dtype=torch.float32))
-        self.pool_variance = nn.Parameter(torch.tensor(1, dtype=torch.float32))
+        self.pool_mean_x = x
+        self.pool_mean_y = y
+        self.pool_variance = sigma
         self.bias = torch.rand(1, requires_grad = True)
 
         self.feature_map_weights = torch.rand(num_feature_maps, requires_grad = True)
@@ -335,17 +339,16 @@ class Average_Model_fwRF(nn.Module):
         pix_min = -deg/2. + 0.5 * dpix
         pix_max = deg/2.
         X_mesh, Y_mesh = np.meshgrid(np.arange(pix_min,pix_max,dpix), np.arange(pix_min,pix_max,dpix))
-        Xm = torch.from_numpy(X_mesh.astype(np.float32))
-        Ym = torch.from_numpy(Y_mesh.astype(np.float32))
-        # very different from NeuroGen's version, based off of the paper
+        # basically the same as NeuroGen's version, with the only difference being
+        # using erf instead of approximating the Gaussian blob integral when
+        # sigma >= dpix
         if self.pool_variance<=0:
-            Zm = torch.zeros_like(torch.from_numpy(Xm))
+            Zm = torch.zeros_like(torch.from_numpy(X_mesh))
         else:
-            Zm = 1. / torch.sqrt((2*self.pool_variance**2)*np.pi) * torch.exp(-((Xm-self.pool_mean_x)**2 + (-Ym-self.pool_mean_y)**2) / (2*self.pool_variance**2))
+            g_mass = np.vectorize(lambda a, b: gaussian_mass(a, b, dpix, dpix, self.pool_mean_x, self.pool_mean_y, self.pool_variance)) 
+            Zm = g_mass(X_mesh, -Y_mesh)
         assert tuple(Zm.shape) == (n_pix, n_pix), "Returned matrix is of size {} when feature map side length is {}.".format(tuple(Zm.shape), n_pix)
-        if torch.sum(Zm) > 0:
-            return Zm/torch.sum(Zm)
-        return Zm
+        return X_mesh, -Y_mesh, Zm
 
     # first calculate the "integrals" of each picture
     # each picture generates a bunch of feature maps in each layer of AlexNet, and these feature maps (basically a matrix)
