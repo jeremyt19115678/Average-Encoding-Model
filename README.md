@@ -99,3 +99,5 @@ Note that the `validation` folder holds the validation/test set (**the precise u
 - Explore fwRF models. Status: **IN PROGRESS**. Implemented fwRF model, but it is still quite buggy. Need Zijin's further assistance.
 - Set aside testing set. Status: **INCOMPLETE**.
 - Implement model, optimizer, and loss wrappers (i.e. instead of specifying model, optimizer, and loss type with `String` variables, pass them directly instead). Status: **INCOMPLETE**.
+- Grid Search for optimal x, y, sigma. Status: **INCOMPLETE**.
+- Find the 1000 feature maps with highest variance for the fully connected layers. Status: **INCOMPLETE**.
