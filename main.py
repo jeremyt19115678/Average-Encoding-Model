@@ -14,6 +14,13 @@ from torch.utils.data import Dataset, DataLoader
 from alexnet import Alexnet_fmaps
 from scipy.special import erf
 
+verbose = False
+
+# print msg if the global variable verbose is True
+def log(msg):
+    if verbose:
+        print(msg)
+
 # return the arguments
 def get_args():
     parser = argparse.ArgumentParser()
@@ -55,7 +62,7 @@ if __name__ == "__main__":
     '''
     pass
 
-#return a list of the sequence in which the images are presented to the subject
+#return a list of images ID in the order of which the images are presented to the subject
 def image_sequence():
     # from Zijin's Code
     exp_design_file = os.path.realpath("nsd_expdesign.mat")
@@ -64,6 +71,8 @@ def image_sequence():
     return ordering.tolist() # cast to Python List
 
 # return the list of IDs of images that are shared across all subjects
+# note that some images are not actually shown to all subjects due to experiment constraints
+# to get the the IDs of all actually shown shared images, use get_shown_shared_images()
 def get_shared_images():
     exp_design_file = os.path.realpath("nsd_expdesign.mat")
     exp_design = loadmat(exp_design_file)
@@ -76,21 +85,68 @@ def get_shared_images():
             shared_list.append(image_num)
     return shared_list
 
+# return the list of IDs of the shared images that are actually shown to all subjects
+def get_shown_shared_images():
+    responses = basic_info()
+    shared_set = get_shared_images() # will contain the list of shared images
+    # there should be 907 images that has a "correct answer"
+    shown_shared = []
+    for img in shared_set:
+        in_all = True
+        for nested_dict in responses:
+            if img not in nested_dict:
+                in_all = False
+                break
+        if in_all:
+            shown_shared.append(img)
+    return shown_shared
+
 # return a sorted list of ROIs
 def get_ROIs():
     return sorted(['OFA', 'FFA1', 'FFA2', 'mTLfaces', 'aTLfaces', 'EBA', 'FBA1', 'FBA2', 'mTLbodies', 'OPA', 'PPA', 'RSC', 'OWFA', 'VWFA1', 'VWFA2', 'mfswords', 'mTLwords', 'V1v', 'V1d', 'V2v', 'V2d', 'V3v', 'V3d', 'hV4', 'L_amygdala', 'L_hippocampus', 'R_amygdala', 'R_hippocampus'])
 
-# get some basic info regarding the data set:
-# if an image is shown multiple times to a subject, how different are the activations each time?
-# visualize the shared 1000 images activation 
+# returns responses, a list of length 8, wich each element being a nested_dictionary
+# nested_dictionary is a dictionary that maps from the number/ID of the image to response_value
+# response_value is a dictionary that maps from the ROI name to the list of activation value
 def basic_info():
-    #get the sequence in which the images are presented to the subjects
-    # number of images presented to each subject
-    # e.g. the number of images shown to subject 3 is at the 3rd element in this list
+
+    # brief sanity check
+    def sanity_check(responses):
+        num_trials = [30000, 30000, 24000, 22500, 30000, 24000, 30000, 22500]
+        num_distinct = [10000, 10000, 9411, 9209, 10000, 9411, 10000, 9209]
+        assert len(responses) == 8 # there should be 8 subjects
+        for i in range(8):
+            assert len(responses[i].keys()) == num_distinct[i] # number of distinct images of the subject should match
+            occurrence = [0 for i in range(10000)] #number of times each image was shown to the subject
+            for j in ordering[:num_trials[i]]:
+                occurrence[j] += 1
+            assert sum(occurrence) == num_trials[i] # number of trials should match
+            for imageID, res_val in responses[i].items():
+                    assert sorted(list(res_val.keys())) == get_ROIs(), "Expected: {}\n, Got: {}\n".format(get_ROIs(), sorted(list(res_val.keys()))) # check if the ROIs are expected
+                    for act_list in res_val.values():
+                            assert len(act_list) == occurrence[imageID]
+                            for activation in act_list:
+                                assert isinstance(activation, float)
+        log("Passed all sanity checks.")
+
     ordering = image_sequence()
-    # responses is a list of length 8, wich each element being a nested_dictionary
-    # nested_dictionary is a dictionary that maps from the number/ID of the image to response_value
-    # response_value is a dictionary that maps from the ROI name to the list of activation value
+    # try to load from file if possible
+    if os.path.exists(os.path.realpath("all_subj_roi_activations.json")):
+        try:
+            with open(os.path.realpath('all_subj_roi_activations.json'), 'r') as f:
+                responses = json.load(f)['data']
+                # since JSON converts the keys to strings, we have to convert it back
+                for nested_dictionary in responses:
+                    for key in list(nested_dictionary.keys()):
+                        nested_dictionary[int(key)] = nested_dictionary.pop(key)
+
+            sanity_check(responses)
+            log("Successfully read from file all_subj_roi_activations.json")
+            return responses
+        except:
+            pass
+    # generate from scratch
+    log("No suitable all_subj_roi_activations.json found. Generating one.")
     responses = []
     for i in range(1,9):
         nested_dictionary = {}
@@ -114,27 +170,18 @@ def basic_info():
                 response_value[roi] = activation_list
             nested_dictionary[image_ID] = response_value
         responses.append(nested_dictionary)
-    
-    # some sanity checks
-    num_trials = [30000, 30000, 24000, 22500, 30000, 24000, 30000, 22500]
-    num_distinct = [10000, 10000, 9411, 9209, 10000, 9411, 10000, 9209]
-    assert len(responses) == 8 # there should be 8 subjects
-    for i in range(8):
-        assert len(responses[i].keys()) == num_distinct[i] # number of distinct images of the subject should match
-        occurrence = [0 for i in range(10000)] #number of times each image was shown to the subject
-        for j in ordering[:num_trials[i]]:
-            occurrence[j] += 1
-        assert sum(occurrence) == num_trials[i] # number of trials should match
-        for imageID, res_val in responses[i].items():
-                assert sorted(list(res_val.keys())) == get_ROIs(), "Expected: {}\n, Got: {}\n".format(get_ROIs(), sorted(list(res_val.keys()))) # check if the ROIs are expected
-                for act_list in res_val.values():
-                        assert len(act_list) == occurrence[imageID]
-                        for activation in act_list:
-                            assert isinstance(activation, float)
-    print("Passed all sanity checks.")
+    sanity_check(responses)
+
+    # if a correct "responses" is generated, save it in JSON Object with one attribute
+    # 'data' in file "all_subj_roi_activations.json"
+    with open(os.path.realpath('all_subj_roi_activations.json'), 'w') as f:
+        obj = {'data': responses}
+        f.write(json.dumps(obj))
+        log("Successfully created all_subj_roi_activations.json.")
     return responses
 
-# save plot with filename
+# save plot with filename under the folder specified by custom_path
+# otherwise, save it under folder "graphs"
 def save_plot(filename, custom_path = None):
     if custom_path == None:
         graphics_folder = os.path.realpath('graphs')
@@ -146,22 +193,14 @@ def save_plot(filename, custom_path = None):
     plt.savefig(os.path.join(graphics_folder, filename))
     plt.clf()
 
-# set apart the validation data set
-# output a file that contains all 907 shared images that are shown at least once to every subject
-# a file for each ROI for the average activation (across all trials)
-def extract_validation_set():
+# set apart the shared data set
+# outputs a directory all_images_related_data that contains:
+#   shared_images.h5py: a file that contains all 907 shared images that are shown at least once to every subject
+#   averagea_activation_ROI.txt: 28 files, one for each ROI, that contains the average activation for all images
+def extract_shared_image_set_data():
     responses = basic_info()
-    shared_set = get_shared_images() # will contain the list of shared images
     # there should be 907 images that has a "correct answer"
-    shown_shared = []
-    for img in shared_set:
-        in_all = True
-        for nested_dict in responses:
-            if img not in nested_dict:
-                in_all = False
-                break
-        if in_all:
-            shown_shared.append(img)
+    shown_shared = get_shown_shared_images()
     assert len(shown_shared) == 907
     # read from a h5py file to get the shared images
     image_data_set = h5py.File(os.path.join(os.path.realpath('NSD_stimuli'), 'S1_stimuli_227.h5py'), 'r')
@@ -172,12 +211,12 @@ def extract_validation_set():
     shared_image_data = image_data[shown_shared]
     assert (shared_image_data.shape) == (907, 3, 227, 227), "Unexpected shape: {}".format(shared_image_data.shape)
 
-    # save everything in validation set
-    validation_folder = os.path.realpath('validation')
-    if not os.path.isdir(validation_folder):
-        os.makedirs(validation_folder)
+    # save everything in images folder
+    all_images_folder = os.path.realpath('all_images_related_data')
+    if not os.path.isdir(all_images_folder):
+        os.makedirs(all_images_folder)
     # save the shared_image_data somehow (perhaps h5py)
-    with h5py.File(os.path.join(validation_folder, 'shared_images.h5py'), 'w') as f:
+    with h5py.File(os.path.join(all_images_folder, 'shared_images.h5py'), 'w') as f:
         f.create_dataset("image_data", data=shared_image_data)
     # save the stimuli per ROI
     roi_activation = {} # maps ROI (28 of them) to list of activations (907 of them)
@@ -192,7 +231,7 @@ def extract_validation_set():
         roi_activation[roi] = img_activations
     assert len(roi_activation.keys()) == 28, "Number of activation ({}) is different from expected 28.".format(len(roi_activation.keys()))
     for roi, activations in roi_activation.items():
-        with open(os.path.join(validation_folder, "average_activation_{}.txt".format(roi)), 'w') as f:
+        with open(os.path.join(all_images_folder, "average_activation_{}.txt".format(roi)), 'w') as f:
             texts = ""
             nan_indices = []
             for image_activations in activations:
@@ -206,6 +245,49 @@ def extract_validation_set():
                 print("Subjects that do not have ROI {}: {}".format(roi, one_indexed_nan_indices))
             if len(set(nan_indices)) != 1:
                 print("Unexpected NaN value encountered in ROI: {}".format(roi))
+
+# generates the following JSON (all_images_related_data/partition.json) if it doesn't already exist:
+# {
+#   'validation': [...], // this will contain the ID's of the validation set
+#   'test': [...], // this will contain the ID's of the test set
+#   'train': [...] // this will contain the ID's of the train set
+# }
+def partition_all_images(test_proportion = 0.1, validation_proportion = 0.2, train_proportion = 0.7):
+    all_shared_ids = np.array(get_shown_shared_images()).astype(int)
+    np.random.shuffle(all_shared_ids)
+    all_shared_ids = all_shared_ids.astype(int).tolist()
+    test_set_count, validation_set_count = int(len(all_shared_ids) * test_proportion), int(len(all_shared_ids) * validation_proportion)
+    if os.path.exists(os.path.realpath('all_images_related_data/partition.json')):
+        # read in the JSON and report the current partition
+        with open(os.path.realpath('all_images_related_data/partition.json'), 'r') as f:
+            current_partitions = json.load(f)
+        # make sure that the current partition works and has the specified length
+        working_partition = len(current_partitions.keys()) == 3
+        working_partition = working_partition and "validation" in current_partitions and "train" in current_partitions and "test" in current_partitions
+        working_partition = working_partition and sorted(current_partitions['validation'] + current_partitions['train'] + current_partitions['test']) == sorted(get_shown_shared_images())
+        working_partition = working_partition and len(current_partitions['validation']) == validation_set_count and len(current_partitions['test']) == test_set_count
+        # if the current partition works, report it then exit
+        if working_partition:
+            print("all_images_related_data/partition.json already exists, no updates will be carried out.")
+            print("The validation set contains {} images.\nThe training set contains {} images.\nThe testing set contains {} images.".format(len(current_partitions['validation']), len(current_partitions['train']), len(current_partitions['test'])))
+            return
+    print("There does not currently exist a valid partition at all_images_related_data/partition, will be generating one.")
+    #checking parameters
+    assert test_proportion >= 0 and validation_proportion >= 0 and train_proportion >= 0, "the proportions of the test, validation, and train sets need to all be positive."
+    assert test_proportion + validation_proportion + train_proportion == 1, "the proportions of the test, validation, and train sets need to add up to 1."
+    # generating the partitions
+    test_set_ids = all_shared_ids[:test_set_count]
+    validation_set_ids = all_shared_ids[test_set_count: test_set_count + validation_set_count]
+    train_set_ids = all_shared_ids[test_set_count + validation_set_count:]
+    # make sure the partitions work
+    assert sorted(test_set_ids + validation_set_ids + train_set_ids) == sorted(all_shared_ids)
+    # generate needed folders if needed
+    if not os.path.isdir(os.path.realpath('all_images_related_data')):
+        extract_shared_image_set_data()
+    with open(os.path.join("all_images_related_data", "partition.json"), 'w') as f:
+        obj = {'validation': validation_set_ids, 'train': train_set_ids, 'test': test_set_ids}
+        f.write(json.dumps(obj))
+    print("Done.\nThe validation set contains {} images.\nThe training set contains {} images.\nThe testing set contains {} images.".format(len(validation_set_ids), len(train_set_ids), len(test_set_ids)))
 
 # generate a folder for a certain experiment, identified by the time stamp (and perhaps setup)
 def generate_k_fold_dataset(partition: int):
@@ -287,141 +369,6 @@ class Average_Model_Regression(nn.Module):
     def forward(self, x):
         return torch.flatten(self.lin(x))
 
-def gaussian_mass(x, y, dx, dy, x_mean, y_mean, sigma):
-    return 0.25*(erf((x+dx/2-x_mean)/(np.sqrt(2)*sigma)) - erf((x-dx/2-x_mean)/(np.sqrt(2)*sigma))) * (erf((y+dy/2-y_mean)/(np.sqrt(2)*sigma)) - erf((y-dy/2-y_mean)/(np.sqrt(2)*sigma)))
-
-# largely adapted from Zijin's Code in Neurogen
-class Average_Model_fwRF(nn.Module):
-
-    '''
-    Post-condition: 
-    self.aperature is just adapted from code from neurogen, i don't get what this does
-    self.fmaps_rez is of type List and its elements (of some numerical type) are the side lengths
-                   of the layers in the feature maps
-    self.pool_mean_x and self.pool_mean_y is the center of the Gaussian pooling field (should be a PyTorch parameter so autograd is possible)
-    self.pool_variance is also used to generate the Gaussian pooling field (PyTorch parameter for autograd)
-    self.feature_map_weights is also a Pytorch tensor with autograd enabled, used in the linear combination of the feature maps (after the pooling field)
-    self.bias is the bias that will be added at the end of the linear combination (PyTorch parameter for autograd)
-    '''
-    def __init__(self, x = 0, y = 0, sigma = 1, input_shape=(1,3,227,227), aperture=1.0, device=torch.device("cpu")):
-        super(Average_Model_fwRF, self).__init__()
-        
-        self.aperture = aperture # I don't really get what this does
-
-        # initialize a tensor of shape (1, 3, 227, 227) of random values from 0-1 (this resembles a picture)
-        # we feed the picture into the _fmaps_fn to get an output to get a list of output of each layer
-        _x = torch.empty((1,)+input_shape[1:], device=device).uniform_(0, 1)
-        _fmaps_fn = Alexnet_fmaps()
-        all_fmaps = _fmaps_fn(_x)
-        _fmaps = all_fmaps[:5] + all_fmaps[6:]
-        self.fmaps_rez = [] # should contain the resolution of the feature maps of each layer
-        num_feature_maps = 0
-        for k,_fm in enumerate(_fmaps):
-            assert _fm.size()[2]==_fm.size()[3], 'All feature maps need to be square'
-            self.fmaps_rez += [_fm.size()[2],]
-            num_feature_maps += _fm.size()[1]
-        # self.fmaps_rez should contain 27, 27, 13, 13, 13, 1, 1, 1 (refer to README)
-
-        # should perhaps be random
-        self.pool_mean_x = x
-        self.pool_mean_y = y
-        self.pool_variance = sigma
-        self.bias = torch.rand(1, requires_grad = True)
-
-        self.feature_map_weights = torch.rand(num_feature_maps, requires_grad = True)
- 
-    # adopted from Zijin's code
-    # modified slightly with help from the paper by Ghislain St-Yves et al.
-    # "The feature-weighted receptive field: an interpretable encoding model for complex feature spaces"
-    def make_gaussian_mass(self, n_pix):
-        deg = 1.0 # seem to be constant in Zijin's code
-        dpix = deg / n_pix
-        pix_min = -deg/2. + 0.5 * dpix
-        pix_max = deg/2.
-        X_mesh, Y_mesh = np.meshgrid(np.arange(pix_min,pix_max,dpix), np.arange(pix_min,pix_max,dpix))
-        # basically the same as NeuroGen's version, with the only difference being
-        # using erf instead of approximating the Gaussian blob integral when
-        # sigma >= dpix
-        if self.pool_variance<=0:
-            Zm = torch.zeros_like(torch.from_numpy(X_mesh))
-        else:
-            g_mass = np.vectorize(lambda a, b: gaussian_mass(a, b, dpix, dpix, self.pool_mean_x, self.pool_mean_y, self.pool_variance)) 
-            Zm = g_mass(X_mesh, -Y_mesh)
-        assert tuple(Zm.shape) == (n_pix, n_pix), "Returned matrix is of size {} when feature map side length is {}.".format(tuple(Zm.shape), n_pix)
-        return X_mesh, -Y_mesh, Zm
-
-    # first calculate the "integrals" of each picture
-    # each picture generates a bunch of feature maps in each layer of AlexNet, and these feature maps (basically a matrix)
-    # are "dotted" (summed the products of corresponding entries) with the gaussian pooling field (generated using
-    # self.pool_variance, self.pool_mean_x, and self.pool_mean_y)
-    # each of these feature maps after being dotted would generate a single scalar, which is then weighted by 
-    # self.feature_map_weights then summed together (resulting in a linear combination of the feature maps' dot products)
-    # this linear combination added with self.bias is the result of a single "forward" pass.
-    def forward(self, fmaps):
-        integrals = {}
-        # for each element in the fmaps (represent the pooling field produced by one layer)
-        for layer_num, bad_layer in enumerate(fmaps):
-            # generate the pooling field
-            pooling_field = self.make_gaussian_mass(self.fmaps_rez[layer_num])
-            layer = torch.squeeze(bad_layer, dim=1)
-            # for each element in the layer (the feature maps of a single picture)
-            for image_num, image_fmaps in enumerate(layer):
-                for fmap in image_fmaps:
-                    assert len(tuple(fmap.shape)) == 2, "fmap.shape = {}".format(fmap.shape)
-                    # get the "integral" and append it to a list
-                    integral = torch.tensordot(fmap, pooling_field)
-                    if image_num in integrals:
-                        integrals[image_num].append(integral)
-                    else:
-                        integrals[image_num] = [integral]
-        img_keys = sorted(list(integrals.keys()))
-        integrals_list = [integrals[img_num] for img_num in img_keys]
-        integrals_torch = torch.tensor(integrals_list, dtype=torch.float32)
-        # get weighted sum of the integrals
-        return torch.matmul(integrals_torch, self.feature_map_weights) + self.bias
-
-class Custom_Dataset_fwRF(Dataset):
-    # regression_power = 0 means this dataset is NOT for regression model
-    def __init__(self, partition: list, specific_roi: str):
-        images_path = os.path.realpath('validation/shared_images.h5py')
-        assert os.path.exists(images_path)
-        # get all the images
-        image_file = h5py.File(images_path, 'r')
-        all_images = np.copy(image_file['image_data']).astype(np.float32)
-        image_file.close()
-        # convert images into AlexNet readings and save them
-        alexnet = Alexnet_fmaps()
-        readings = []
-        # all_images should be of shape n, 3, 227, 227
-        for image in all_images:
-            image_tensor = torch.from_numpy(image.reshape(1, 3, 227, 227))
-            fmaps = alexnet(image_tensor)
-            readings.append(fmaps[:5] + fmaps[6:]) # skip over the 6th element, which is added for the sake of NN and not previously in fwRF used in neurogen
-        self.fmaps = readings
-        # note the image ids
-        assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
-        self.image_ids = partition
-        # note the roi this fwRF model is for
-        assert isinstance(specific_roi, str) and specific_roi in get_ROIs(), "Invalid ROI: {}".format(specific_roi)
-        self.roi = specific_roi
-        # load in the labels
-        filename = os.path.realpath('validation/average_activation_{}.txt'.format(self.roi))
-        activation_list = np.loadtxt(filename).astype(np.float32)
-        assert activation_list.shape == (907, ), "activation_list length is {}, different from expected 907.".format(activation_list.shape)
-        self.roi_activation_map = activation_list
-
-    def __len__(self):
-        return len(self.image_ids)
-
-    def __getitem__(self, index):
-        # map from index to the id of the image and the roi
-        # get the id of the image
-        image_ind = self.image_ids[index]
-        input = self.fmaps[image_ind]
-        # fetch the label of this image
-        label = torch.tensor(self.roi_activation_map[image_ind])
-        return input, label
-
 class Custom_Dataset(Dataset):
     # regression_power = 0 means this dataset is NOT for regression model
     def __init__(self, partition: list, specific_roi: str = None, regression_power: int = 0):
@@ -492,7 +439,7 @@ class Custom_Dataset(Dataset):
 # regression_power parameter is by default 0, which indicates a NN is being tested
 # if it's any other positive integer, it is a linear regression model
 # if it's None, it is a fwRF model
-def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE", roi = None, verbose=True, regression_power = 0, save = False):
+def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE", roi = None, regression_power = 0, save = False):
     description = "This is a CV on a linear regression model with 9216 * n + 1 input dimension, " + \
                 "where n, is the power to which the independent variables are raised." + \
                 "The 9216 of the input comes from the " + \
@@ -639,8 +586,7 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
             if i in test_points:
                 test_error, test_r = test(test_loader, model)
                 train_error,train_r= test(train_loader,model)
-                if verbose:
-                    print("Epoch: {} / {}\tTrain MSE: {}\tTrain r: {}\tTest MSE: {}\tTest r: {}".format(i + 1, epoch, round(train_error, 4), round(train_r, 4), round(test_error, 4), round(test_r, 4)))
+                log("Epoch: {} / {}\tTrain MSE: {}\tTrain r: {}\tTest MSE: {}\tTest r: {}".format(i + 1, epoch, round(train_error, 4), round(train_r, 4), round(test_error, 4), round(test_r, 4)))
                 new_test_list = mse_dict.get('test', [])
                 new_test_list.append(test_error)
                 new_test_r_list = mse_dict.get('test_r', [])
@@ -717,3 +663,18 @@ def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200,
         plt.title("Average Pearson's Correlation over Time\n({}, lr={}, loss={}, roi={})".format(optimizer_type, learning_rate, loss_type, roi))
     plt.legend()
     save_plot("avg_r_curve.png", custom_path=filename)
+
+# given the training set, return a mask for feature maps for the CNN's fully connected layers
+# that have more than reduction_size feature maps
+# the mask should retain the maximal variance
+def get_fully_connected_layer_mask(training_set, reduction_size = 1024):
+    pass
+
+def setVerbose(val):
+    assert isinstance(val, bool)
+    global verbose
+    verbose = val
+
+def getVerbose():
+    global verbose
+    print("Verbose = {}".format(verbose))
