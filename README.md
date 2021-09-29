@@ -97,7 +97,7 @@ Note that the `validation` folder holds the validation/test set (**the precise u
 - Consider using feature maps other than AlexNet trained on ImageNet. Status: **INCOMPLETE, but LOW PRIORITY**.
 - Explore using Linear models. Status: **COMPLETED**. Explored linear models on AlexNet 9216 feature maps. Results are poor compared to the neural networks. As the input are raised to higher power, the fit becomes worse in terms of both training and validation dataset.
 - Explore fwRF models. Status: **IN PROGRESS**. Implemented fwRF model, but it is still quite buggy. Need Zijin's further assistance.
-- Set aside testing set. Status: **INCOMPLETE**.
+- Set aside testing set. Status: **COMPLETED**. Read from `all_images_related_data/partition.json` to get the image IDs of the images in the image sets.
 - Implement model, optimizer, and loss wrappers (i.e. instead of specifying model, optimizer, and loss type with `String` variables, pass them directly instead). Status: **INCOMPLETE**.
 - Grid Search for optimal x, y, sigma. Status: **INCOMPLETE**.
 - Find the 1000 feature maps with highest variance for the fully connected layers. Status: **INCOMPLETE**.

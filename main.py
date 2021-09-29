@@ -109,7 +109,6 @@ def get_ROIs():
 # nested_dictionary is a dictionary that maps from the number/ID of the image to response_value
 # response_value is a dictionary that maps from the ROI name to the list of activation value
 def basic_info():
-
     # brief sanity check
     def sanity_check(responses):
         num_trials = [30000, 30000, 24000, 22500, 30000, 24000, 30000, 22500]
@@ -346,323 +345,84 @@ def one_hot_np(length: int, position: int):
     arr[position] = 1
     return np.array(arr)
 
-class Average_Model_NN(nn.Module):
-    def __init__(self):
-        super(Average_Model_NN, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(9216, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1)
-        )
-    
-    def forward(self, x):
-        return torch.flatten(self.net(x))
+# evaluate the model (specified by the wrapper) using the specified dataset
+# performance evaluated with MSE and Pearson's Correlation
+# returns a tuple of two elements, the first is the MSE, the second is the Pearson's Correlation
+def evaluate_performance(dataloader, model):
+    loss_fn = nn.MSELoss()
+    test_loss = []
+    predictions = []
+    labels = []
+    with torch.no_grad():
+        for X,y in dataloader:
+            pred = model(X)
+            for i in pred.numpy().astype(np.float):
+                predictions.append(i)
+            for i in y.numpy().astype(np.float):
+                labels.append(i)
+            test_loss.append(loss_fn(pred, y).item())
+    corrcoef_matrix = np.corrcoef(np.array(predictions).astype(np.float32), np.array(labels).astype(np.float32))
+    assert corrcoef_matrix.shape == (2, 2), "{}".format(corrcoef_matrix)
+    return np.mean(test_loss), corrcoef_matrix[1,0]
 
-class Average_Model_Regression(nn.Module):
-    def __init__(self, power: int = 1):
-        super(Average_Model_Regression, self).__init__()
-        assert isinstance(power, int) and power >= 1, "Power has to be an integer >=1."
-        self.lin = nn.Linear(9216 * power, 1)
-
-    def forward(self, x):
-        return torch.flatten(self.lin(x))
-
-class Custom_Dataset(Dataset):
-    # regression_power = 0 means this dataset is NOT for regression model
-    def __init__(self, partition: list, specific_roi: str = None, regression_power: int = 0):
-        assert isinstance(regression_power, int) and regression_power >= 0, "regression_power has to be greater than or equal to 0"
-        images_path = os.path.realpath('validation/shared_images.h5py')
-        assert os.path.exists(images_path)
-        # get all the images
-        image_file = h5py.File(images_path, 'r')
-        all_images = np.copy(image_file['image_data']).astype(np.float32)
-        image_file.close()
-        # convert images into AlexNet readings
-        input_tensor = torch.from_numpy(all_images)
-        alexnet = Alexnet_fmaps()
-        readings = alexnet(input_tensor)[5]
-        assert isinstance(readings, torch.Tensor)
-        readings = readings.cpu().detach().numpy()
-        assert readings.shape[1] == 9216
-        # if this is not a regression dataset
-        if regression_power == 0:
-            self.fmaps = readings
-        else: #this is a regression dataset
-            nth_power_readings = []
-            for reading in readings:
-                original_reading = reading
-                polynomial_input = original_reading
-                for j in range(2, regression_power+1):
-                    nth_power_reading = np.power(original_reading, j)
-                    polynomial_input = np.concatenate((polynomial_input, nth_power_reading))
-                nth_power_readings.append(polynomial_input)
-            self.fmaps = np.array(nth_power_readings)
-
-        assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
-        self.image_ids = partition
-        self.specific_roi = specific_roi
-        if self.specific_roi == None:
-            self.rois = get_ROIs()
-        else:
-            assert isinstance(self.specific_roi, str) and self.specific_roi in get_ROIs(), "Invalid ROI: {}".format(self.specific_roi)
-            self.rois = [self.specific_roi]
-        self.roi_activation_map = {}
-        for roi in self.rois:
-            filename = os.path.realpath('validation/average_activation_{}.txt'.format(roi))
-            activation_list = np.loadtxt(filename).astype(np.float32)
-            assert activation_list.shape == (907, ), "activation_list length is {}, different from expected 907.".format(activation_list.shape)
-            self.roi_activation_map[roi] = activation_list
-
-    def __len__(self):
-        return len(self.image_ids) * len(self.rois)
-
-    def __getitem__(self, index):
-        # map from index to the id of the image and the roi
-        # get the id of the image and roi
-        image_ind = self.image_ids[int(index / len(self.rois))]
-        roi_id = index % len(self.rois)
-        roi = self.rois[roi_id]
-        # concatenate the image feature w/ the one hot encoding of roi for the input Tensor
-        if self.specific_roi == None:
-            input_np = np.concatenate((self.fmaps[image_ind], one_hot_np(len(self.rois), roi_id))).astype(np.float32)
-        else:
-            input_np = np.array(self.fmaps[image_ind]).astype(np.float32)
-        input = torch.from_numpy(input_np)
-        # fetch the label of this image
-        label = torch.tensor(self.roi_activation_map[roi][image_ind])
-        return input, label
-
-# find the newest cv folder, run the CV on the model described in description
-# get the MSE and save description
-# regression_power parameter is by default 0, which indicates a NN is being tested
-# if it's any other positive integer, it is a linear regression model
-# if it's None, it is a fwRF model
-def run_k_fold_cv(optimizer_type = "Adam", learning_rate = 0.00002, epoch = 200, loss_type = "MSE", roi = None, regression_power = 0, save = False):
-    description = "This is a CV on a linear regression model with 9216 * n + 1 input dimension, " + \
-                "where n, is the power to which the independent variables are raised." + \
-                "The 9216 of the input comes from the " + \
-                "output of the last convolutional layer of AlexNet and the 1 is the bias term."
-
-    if regression_power == None: # fwRF model must have roi specified
-        assert roi != None
-
-    # assert that roi is okay
-    if roi != None:
-        assert isinstance(roi, str) and roi in get_ROIs(), "Invalid roi: {}".format(roi)
-
-    # assert that the regression_power is okay
-    assert regression_power == None or (isinstance(regression_power, int) and regression_power >= 0), "Invalid regression_power: has to be integer >= 0 or None."
-
-    # find the oldest CV folder
-    directory_str = os.path.realpath('experiments')
-    directory = os.fsencode(directory_str)
-    timestamps = []
-    for file in os.listdir(directory):
-        folder = os.path.join(directory_str, os.fsdecode(file))
-        if "cross_validation_" in folder:
-            # open the json if it exists, check if it's completed
-            about_path = os.path.join(folder, 'about.json')
-            if os.path.exists(about_path):
-                with open(about_path, 'r') as f:
-                    cv_info = json.load(f)
-                    if isinstance(cv_info, dict) and 'partitions' in cv_info and 'completed' in cv_info and not cv_info['completed']:
-                        timestamps.append(float(re.search("cross_validation_(.*)", folder).group(1)))
-    if len(timestamps) == 0:
-        print("Cannot find any cross validation that haven't been done already. Consider calling generate_k_fold_dataset()")
-        return
-    filename = os.path.join(directory_str, "cross_validation_{}".format(str(int(min(timestamps)))))
-    print("Running experiment dataset at: {}".format(filename))
-
-    # generate the Torch Dataset and the DataLoader
-    with open(os.path.join(filename, "about.json"), 'r') as f:
-        cv_info = json.load(f)
-
-    num_partitions = len(cv_info['partitions'])
-    print("Running {}-fold CV.\nEpoch: {}\nOptimizer: {}\nLR: {}".format(num_partitions, epoch, optimizer_type, learning_rate))
-    print("ROI: {}".format(roi if roi != None else "all"))
-    if regression_power is not None:
-        model_type = "NN" if regression_power == 0 else "regression-{}".format(regression_power)
-        print("Model Type: {}".format("NN" if regression_power == 0 else "Regression (power = {})".format(regression_power)))
-    else:
-        model_type = "fwRF"
-        print("Model Type: fwRF")
-
+# train the model (specified by the wrapper) for specified numbers of epoch using the specified dataset
+def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64):
     # Get cpu or gpu device for training.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using {} device".format(device))
 
-    # using -r as a loss function
-    # most likely not going to be used, as it blows up the weights
-    def r_loss(prediction, label):
-        def cov(x, y):
-            assert x.size() == y.size() and len(tuple(x.size())) == len(tuple(y.size())) == 1, "Size {} and {} either mismatch or is not 1D.".format(x.size(), y.size())
-            n = x.size()[0]
-            x_mean, y_mean = torch.mean(x), torch.mean(y)
-            return torch.dot(x - x_mean, y - y_mean) / (n - 1)
-        return (-cov(prediction, label)) / torch.sqrt(cov(prediction, prediction)).item() / torch.sqrt(cov(label, label)).item()
-
-    def ridge_regression_loss(prediction, label, regularization_constant, model):
-        return torch.mean(torch.pow(prediction - label, 2)) + regularization_constant * (torch.sum(model.feature_map_weights) + model.bias)
-
-    # functions to be called during training and testing
-    def train(dataloader, model, loss_type, optimizer):
-        if loss_type == "MSE":
-            loss_fn = nn.MSELoss()
-        elif loss_type == "r":
-            loss_fn = r_loss
+    def train(dataloader, model, loss_func, optimizer):
         for batch, (X, y) in enumerate(dataloader):
-            if loss_type == "r" and tuple(y.shape)[0] <= 1:
-                print("Skipping batch of X, y of size {}, {}.".format(X.shape, y.shape))
-                continue
-            if regression_power is not None:
-                X, y = X.to(device), y.to(device)
-            else:
-                y = y.to(device)
+            X, y = X.to(device), y.to(device)
             pred = model(X)
-            if loss_type == "MSE" or loss_type == "r":
-                loss = loss_fn(pred, y)
-            elif regression_power == None:
-                loss = ridge_regression_loss(pred, y, regularization_constant, model)
+            loss = loss_func(pred, y)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-    def test(dataloader, model):
-        loss_fn = nn.MSELoss()
-        test_loss = []
-        predictions = []
-        labels = []
-        with torch.no_grad():
-            for X,y in dataloader:
-                pred = model(X)
-                for i in pred.numpy().astype(np.float):
-                    predictions.append(i)
-                for i in y.numpy().astype(np.float):
-                    labels.append(i)
-                test_loss.append(loss_fn(pred, y).item())
-        corrcoef_matrix = np.corrcoef(np.array(predictions).astype(np.float32), np.array(labels).astype(np.float32))
-        assert corrcoef_matrix.shape == (2, 2), "{}".format(corrcoef_matrix)
-        return np.mean(test_loss), corrcoef_matrix[1,0]
-
-    error_list = []
-    state_dicts = []
-    # CV itself
-    for partition_num, partition in enumerate(cv_info['partitions']):
-        print("Training fold {}".format(partition_num + 1))
-        test_set = partition['test']
-        train_set = partition['train']
-        if regression_power is not None:
-            test_set_torch = Custom_Dataset(test_set, specific_roi=roi, regression_power=regression_power)
-            train_set_torch = Custom_Dataset(train_set, specific_roi=roi, regression_power=regression_power)
-        else:
-            test_set_torch = Custom_Dataset_fwRF(test_set, roi)
-            train_set_torch = Custom_Dataset_fwRF(train_set, roi)
-
-        # create the loader
-        test_loader = DataLoader(test_set_torch)
-        train_loader = DataLoader(train_set_torch, shuffle=True, batch_size = 64)
-
-        # train the model (from PyTorch tutorial)
-        if regression_power == None:
-            model = Average_Model_fwRF()
-        elif regression_power == 0: # this indicates we're training an NN
-            model = Average_Model_NN()
-        else:
-            model = Average_Model_Regression(regression_power)
-        if not loss_type == "MSE" and not loss_type == "r":
-            print("Unknown type of loss. Please try either 'MSE' or 'r'.")
-            return
-        if optimizer_type == "SGD":
-            optim = torch.optim.SGD(model.parameters(), lr=learning_rate)
-        if optimizer_type == "Adam":
-            optim = torch.optim.Adam(model.parameters(), lr=learning_rate)
-        test_points = np.linspace(0, epoch, num=min(25, epoch), endpoint = False).astype(int)
-        mse_dict = {}
-        for i in range(epoch):
-            train(train_loader, model, loss_type, optim)
-            # evaluate the model every once in a while and save it
-            if i in test_points:
-                test_error, test_r = test(test_loader, model)
-                train_error,train_r= test(train_loader,model)
-                log("Epoch: {} / {}\tTrain MSE: {}\tTrain r: {}\tTest MSE: {}\tTest r: {}".format(i + 1, epoch, round(train_error, 4), round(train_r, 4), round(test_error, 4), round(test_r, 4)))
-                new_test_list = mse_dict.get('test', [])
-                new_test_list.append(test_error)
-                new_test_r_list = mse_dict.get('test_r', [])
-                new_test_r_list.append(test_r)
-                new_train_list = mse_dict.get('train', [])
-                new_train_list.append(train_error)
-                new_train_r_list = mse_dict.get('train_r', [])
-                new_train_r_list.append(train_r)
-                mse_dict['test'] = new_test_list
-                mse_dict['train']= new_train_list
-                mse_dict['test_r']=new_test_r_list
-                mse_dict['train_r']=new_train_r_list
-        final_test_error, final_train_error = test(test_loader, model), test(train_loader, model)
-        print("Final Test MSE:: {}\tTest r:: {}".format(*final_test_error))
-        print("Final Train MSE:: {}\tTrain r:: {}".format(*final_train_error))
-        mse_dict['test'].append(final_test_error[0])
-        mse_dict['train'].append(final_train_error[0])
-        mse_dict['test_r'].append(final_test_error[1])
-        mse_dict['train_r'].append(final_train_error[1])
-        error_list.append(mse_dict)
-        # save the models if needed
-        if save == True:
-            state_dicts.append(model.state_dict())
-    
-    # write back to about.json
-    with open(os.path.join(filename, "about.json"), 'w') as f:
-        cv_info['completed'] = True
-        cv_info['description'] = description
-        cv_info['errors'] = error_list
-        f.write(json.dumps(cv_info))
-    print("Updated about.json.")
-
-    # find the fold with the lowest test r and save it
+    # TODO: create the data loader
+    train_loader = DataLoader(model_wrapper.dataset, shuffle=shuffle, batch_size=batch_size)
+    # set up the number of epochs during which the model's performance would be logged
+    test_points = np.linspace(0, epoch, num=min(25, epoch), endpoint = False).astype(int)
+    train_mse_list, train_r_list = [], []
+    # train the model
+    for i in range(epoch):
+        train(train_loader, model_wrapper.model, model_wrapper.loss_func, model_wrapper.optim)
+        # evaluate the model every once in a while and save it
+        if i in test_points:
+            train_mse,train_r= evaluate_performance(train_loader,model_wrapper.model)
+            log("Epoch: {} / {}\tTrain MSE: {}\tTrain r: {}".format(i + 1, epoch, round(train_mse, 4), round(train_r, 4)))
+            train_mse_list.append(train_mse)
+            train_r_list.append(train_r)
+    final_train_error = evaluate_performance(train_loader, model_wrapper.model)
+    print("Final Train MSE:: {}\tTrain r:: {}".format(*final_train_error))
+    train_mse_list.append(final_train_error[0])
+    train_r_list.append(final_train_error[1])
+    # save the models if needed
     if save == True:
-        test_rs = [dic['test_r'][-1] for dic in error_list]
-        best_fold = test_rs.index(max(test_rs))
-        model_file_name = "{}_model_params_{}.pt".format(model_type, roi if roi is not None else "general")
-        model_file_path = os.path.join(filename, model_file_name)
-        torch.save(state_dicts[best_fold], model_file_path)
-        print("The best model of fold {} with a test r of {} should be saved at: {}".format(best_fold + 1, max(test_rs), model_file_path))
-
-    # plot the progress from error_list
-    all_folds_train_error = np.array([i['train'] for i in error_list])
-    all_folds_test_error  = np.array([i['test'] for i in error_list])
-    all_folds_train_r = np.array([i['train_r'] for i in error_list])
-    all_folds_test_r  = np.array([i['test_r'] for i in error_list])
-    avg_train_error_list = [np.mean(all_folds_train_error[:,i]) for i in range(all_folds_train_error.shape[1])]
-    avg_test_error_list  = [np.mean(all_folds_test_error [:,i]) for i in range(all_folds_test_error.shape [1])]
-    avg_train_r_list = [np.mean(all_folds_train_r[:,i]) for i in range(all_folds_train_r.shape[1])]
-    avg_test_r_list  = [np.mean(all_folds_test_r [:,i]) for i in range(all_folds_test_r.shape [1])]
-
+        # TODO: figure out where to store the model
+        pathname = ""
+        torch.save(model_wrapper.model.state_dict(), os.path.realpath(pathname))
+    
     test_points = np.append(test_points, epoch - 1)
     test_points += 1
-    plt.plot(test_points, avg_train_error_list, label="Avg. Training MSE")
-    plt.plot(test_points, avg_test_error_list, label ="Avg. Testing MSE")
-    # plot the models' progression over time for all folds
+
+    # plot the training curve for MSE and Pearson's Correlation
+    plt.plot(test_points, train_mse_list)
     plt.xlabel("Epoch")
     plt.ylabel("MSE")
-    if roi == None:
-        plt.title("Average Training/Testing MSE over Time\n({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
-    else:
-        plt.title("Average Training/Testing MSE over Time\n({}, lr={}, loss={}, roi={})".format(optimizer_type, learning_rate, loss_type, roi))
-    plt.legend()
-    save_plot("avg_mse_curve.png", custom_path=filename)
+    # TODO: more descriptive plot titles
+    plt.title("Average Training MSE over Time")
+    # TODO: where to save the plot
+    save_plot("training_mse_curve.png", custom_path=pathname)
 
-    plt.plot(test_points, avg_train_r_list, label="Avg. Training r")
-    plt.plot(test_points, avg_test_r_list, label ="Avg. Testing r")
-    # plot the models' progression over time for all folds
+    plt.plot(test_points, train_r_list, label="Training Pearson's Correlation")
     plt.xlabel("Epoch")
     plt.ylabel("Pearson's Correlation")
-    if roi == None:
-        plt.title("Average Pearson's Correlation over Time\n({}, lr={}, loss={})".format(optimizer_type, learning_rate, loss_type))
-    else:
-        plt.title("Average Pearson's Correlation over Time\n({}, lr={}, loss={}, roi={})".format(optimizer_type, learning_rate, loss_type, roi))
-    plt.legend()
-    save_plot("avg_r_curve.png", custom_path=filename)
+    # TODO: more descriptive plot titles
+    plt.title("Average Training MSE over Time")
+    # TODO: where to save the plot
+    save_plot("training_r_curve.png", custom_path=pathname)
 
 # given the training set, return a mask for feature maps for the CNN's fully connected layers
 # that have more than reduction_size feature maps
