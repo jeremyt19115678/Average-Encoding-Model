@@ -14,7 +14,7 @@ from torch.utils.data import Dataset, DataLoader
 from alexnet import Alexnet_fmaps
 from scipy.special import erf
 
-verbose = False
+verbose = True
 
 # print msg if the global variable verbose is True
 def log(msg):
@@ -252,7 +252,8 @@ def extract_shared_image_set_data():
 #   'train': [...] // this will contain the ID's of the train set
 # }
 def partition_all_images(test_proportion = 0.1, validation_proportion = 0.2, train_proportion = 0.7):
-    all_shared_ids = np.array(get_shown_shared_images()).astype(int)
+    # we re-index the shared images from 0 to 906
+    all_shared_ids = np.arange(907)
     np.random.shuffle(all_shared_ids)
     all_shared_ids = all_shared_ids.astype(int).tolist()
     test_set_count, validation_set_count = int(len(all_shared_ids) * test_proportion), int(len(all_shared_ids) * validation_proportion)
@@ -371,6 +372,9 @@ def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using {} device".format(device))
 
+    # TODO: create `experiments` folder and `{model_wrapper.model_name}_train_{timestamp}` folder underneath it
+    experiment_folder = ""
+
     def train(dataloader, model, loss_func, optimizer):
         for batch, (X, y) in enumerate(dataloader):
             X, y = X.to(device), y.to(device)
@@ -380,7 +384,7 @@ def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64)
             loss.backward()
             optimizer.step()
 
-    # TODO: create the data loader
+    # create the data loader
     train_loader = DataLoader(model_wrapper.dataset, shuffle=shuffle, batch_size=batch_size)
     # set up the number of epochs during which the model's performance would be logged
     test_points = np.linspace(0, epoch, num=min(25, epoch), endpoint = False).astype(int)
@@ -398,11 +402,11 @@ def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64)
     print("Final Train MSE:: {}\tTrain r:: {}".format(*final_train_error))
     train_mse_list.append(final_train_error[0])
     train_r_list.append(final_train_error[1])
+
     # save the models if needed
     if save == True:
-        # TODO: figure out where to store the model
-        pathname = ""
-        torch.save(model_wrapper.model.state_dict(), os.path.realpath(pathname))
+        model_path = os.path.join(experiment_folder, "{}_model_params_{}.pt".format(model_wrapper.model_name, model_wrapper.roi))
+        torch.save(model_wrapper.model.state_dict(), os.path.realpath(model_path))
     
     test_points = np.append(test_points, epoch - 1)
     test_points += 1
@@ -411,19 +415,16 @@ def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64)
     plt.plot(test_points, train_mse_list)
     plt.xlabel("Epoch")
     plt.ylabel("MSE")
-    # TODO: more descriptive plot titles
-    plt.title("Average Training MSE over Time")
-    # TODO: where to save the plot
-    save_plot("training_mse_curve.png", custom_path=pathname)
+    plt.title("Average Training MSE over Time ({})\nTrained with {} using {} dataset".format(model_wrapper.model_name, model_wrapper.optim_name, model_wrapper.dataset_name))
+    save_plot("training_mse_curve.png", custom_path=experiment_folder)
 
     plt.plot(test_points, train_r_list, label="Training Pearson's Correlation")
     plt.xlabel("Epoch")
     plt.ylabel("Pearson's Correlation")
-    # TODO: more descriptive plot titles
-    plt.title("Average Training MSE over Time")
-    # TODO: where to save the plot
-    save_plot("training_r_curve.png", custom_path=pathname)
+    plt.title("Average Training Correlation over Time ({})\nTrained with {} using {} dataset".format(model_wrapper.model_name, model_wrapper.optim_name, model_wrapper.dataset_name))
+    save_plot("training_r_curve.png", custom_path=experiment_folder)
 
+# TODO:
 # given the training set, return a mask for feature maps for the CNN's fully connected layers
 # that have more than reduction_size feature maps
 # the mask should retain the maximal variance
