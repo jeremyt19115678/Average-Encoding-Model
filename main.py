@@ -245,6 +245,14 @@ def extract_shared_image_set_data():
             if len(set(nan_indices)) != 1:
                 print("Unexpected NaN value encountered in ROI: {}".format(roi))
 
+# def checks if a partition dictionary is valid
+def functional_partition(partition):
+    assert isinstance(partition, dict), "Passed in value is not of type dict"
+    right_length = len(partition.keys()) == 3
+    right_keys = "validation" in partition and "train" in partition and "test" in partition
+    total_IDs = sorted(partition['validation'] + partition['train'] + partition['test']) == [i for i in range(907)]
+    return right_length and right_keys and total_IDs
+
 # generates the following JSON (all_images_related_data/partition.json) if it doesn't already exist:
 # {
 #   'validation': [...], // this will contain the ID's of the validation set
@@ -262,9 +270,7 @@ def partition_all_images(test_proportion = 0.1, validation_proportion = 0.2, tra
         with open(os.path.realpath('all_images_related_data/partition.json'), 'r') as f:
             current_partitions = json.load(f)
         # make sure that the current partition works and has the specified length
-        working_partition = len(current_partitions.keys()) == 3
-        working_partition = working_partition and "validation" in current_partitions and "train" in current_partitions and "test" in current_partitions
-        working_partition = working_partition and sorted(current_partitions['validation'] + current_partitions['train'] + current_partitions['test']) == sorted(get_shown_shared_images())
+        working_partition = functional_partition(current_partitions)
         working_partition = working_partition and len(current_partitions['validation']) == validation_set_count and len(current_partitions['test']) == test_set_count
         # if the current partition works, report it then exit
         if working_partition:
@@ -288,6 +294,21 @@ def partition_all_images(test_proportion = 0.1, validation_proportion = 0.2, tra
         obj = {'validation': validation_set_ids, 'train': train_set_ids, 'test': test_set_ids}
         f.write(json.dumps(obj))
     print("Done.\nThe validation set contains {} images.\nThe training set contains {} images.\nThe testing set contains {} images.".format(len(validation_set_ids), len(train_set_ids), len(test_set_ids)))
+
+# return the list of imageIDs when given a string specifying the dataset
+def fetch_image_ids_list(dataset_type: str):
+    assert dataset_type in ['test', 'validation', 'train'], "Invalid dataset type: {}".format(dataset_type)
+    if os.path.exists(os.path.realpath('all_images_related_data/partition.json')):
+        with open(os.path.realpath('all_images_related_data/partition.json'), 'r') as f:
+            current_partitions = json.load(f)
+            if functional_partition(current_partitions):
+                return current_partitions[dataset_type]
+            else:
+                print("The current all_images_related_data/partition.json is not functional. Call partition_all_images().")
+                return
+    else:
+        print("Unable to fetch image IDs as all_images_related_data/partition.json does not exist. Call partition_all_images().")
+        return
 
 # generate a folder for a certain experiment, identified by the time stamp (and perhaps setup)
 def generate_k_fold_dataset(partition: int):
@@ -368,6 +389,8 @@ def evaluate_performance(dataloader, model):
 
 # train the model (specified by the wrapper) for specified numbers of epoch using the specified dataset
 def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64):
+    # TODO: print out what's being trained, using what
+    
     # Get cpu or gpu device for training.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using {} device".format(device))

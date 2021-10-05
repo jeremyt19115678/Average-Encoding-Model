@@ -1,4 +1,4 @@
-from main import get_ROIs
+from main import get_ROIs, fetch_image_ids_list
 import json
 import os
 
@@ -37,9 +37,9 @@ class Wrapper:
             print("optim_name contains space character. optim_name will be set to all non-space characters up to and not including the first space.")
             optim_name = optim_name[:optim_name.index(' ')]
         self.optim_name = optim_name
-        with open(os.path.realpath('all_images_related_data/partition.json'), 'r') as f:
-            partitions = json.load(f)
-        self.dataset = dataset_class(partitions[dataset_name], roi)
+        image_ids = fetch_image_ids_list(dataset_name)
+        self.dataset = dataset_class(image_ids, roi)
+        self.dataset_name = dataset_name
         self.loss_func = loss_func
         self.roi = roi
-        self.num_samples = len(partitions[dataset_name])
+        self.num_samples = len(image_ids)

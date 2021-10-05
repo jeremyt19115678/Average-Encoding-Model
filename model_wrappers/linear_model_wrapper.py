@@ -8,6 +8,11 @@ from torch.utils.data import Dataset
 from alexnet import Alexnet_fmaps
 from wrapper import Wrapper
 
+'''
+This model takes in a natural number parameter that specifies the power the input would be raised to.
+It takes in the flattened input to the of the first fully-connected layer in AlexNet and outputs a
+polynomial combination of the inputs raised to the specified power.
+'''
 class Average_Model_Regression(nn.Module):
     def __init__(self, power: int = 1):
         super(Average_Model_Regression, self).__init__()
@@ -20,7 +25,6 @@ class Average_Model_Regression(nn.Module):
         return torch.flatten(self.lin(input_raised_to_power))
 
 class Linear_Model_Dataset(Dataset):
-    # regression_power = 0 means this dataset is NOT for regression model
     def __init__(self, partition: list, specific_roi: str = None):
         images_path = os.path.realpath('all_images_related_data/shared_images.h5py')
         assert os.path.exists(images_path)
@@ -33,21 +37,10 @@ class Linear_Model_Dataset(Dataset):
         alexnet = Alexnet_fmaps()
         readings = alexnet(input_tensor)[5]
         assert isinstance(readings, torch.Tensor)
-        readings = readings.cpu().detach().numpy()
+        readings = readings.cpu().detach().numpy().astype(np.float32)
         assert readings.shape[1] == 9216
-        self.fmaps = readings
-        '''
-        # raise the input to specified power
-        nth_power_readings = []
-        for reading in readings:
-            original_reading = reading
-            polynomial_input = original_reading
-            for j in range(2, regression_power+1):
-                nth_power_reading = np.power(original_reading, j)
-                polynomial_input = np.concatenate((polynomial_input, nth_power_reading))
-            nth_power_readings.append(polynomial_input)
-        self.fmaps = np.array(nth_power_readings)
-        '''
+        readings_torch = torch.from_numpy(readings)
+        self.fmaps = readings_torch
 
         assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
         self.image_ids = partition
@@ -66,8 +59,14 @@ class Linear_Model_Dataset(Dataset):
         # map from index to the id of the image and the roi
         # get the id of the image and roi
         image_ind = self.image_ids[index]
-        input_np = np.array(self.fmaps[image_ind]).astype(np.float32)
-        input = torch.from_numpy(input_np)
+        input = self.fmaps[image_ind]
         # fetch the label of this image
         label = torch.tensor(self.activations[image_ind])
         return input, label
+
+'''
+returns the ridge regression loss given the beta and the model (to get the weights)
+'''
+def ridge_regression_loss(pred, label, lin_model, beta):
+    return torch.mean(torch.pow(pred - label, 2)) + beta * (torch.sum(lin_model.lin.weight) + lin_model.lin.bias)
+    torch.mean(torch.pow(prediction - label, 2)) + regularization_constant * (torch.sum(model.feature_map_weights) + model.bias)

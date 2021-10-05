@@ -98,12 +98,12 @@ Note that the `validation` folder holds the validation/test set (**the precise u
 - Explore using Linear models. Status: **COMPLETED**. Explored linear models on AlexNet 9216 feature maps. Results are poor compared to the neural networks. As the input are raised to higher power, the fit becomes worse in terms of both training and validation dataset.
 - Explore fwRF models. Status: **IN PROGRESS**. Implemented fwRF model, but it is still quite buggy. Need Zijin's further assistance.
 - Set aside testing set. Status: **COMPLETED**. Read from `all_images_related_data/partition.json` to get the image IDs of the images in the image sets.
-- Implement model, optimizer, and loss wrappers API. Status: **COMPLETED**.
+- Implement model, optimizer, and loss wrappers API. Status: **COMPLETED**. The following is a brief usage example.
     ```
     import torch
 
     # import necessary modules written specifically for this project
-    from linear_model_wrappers import Average_Model_Regression, Linear_Model_Dataset
+    from model_wrappers.linear_model_wrapper import Average_Model_Regression, Linear_Model_Dataset, ridge_regression_loss
     from wrapper import Wrapper
     import main
 
@@ -114,13 +114,13 @@ Note that the `validation` folder holds the validation/test set (**the precise u
     optim_name = "adam_2e-5"
     dataset_class = Linear_Model_Dataset
     dataset_name = 'test'
-    loss_func = torch.nn.MSELoss()
+    loss_func = lambda a, b: ridge_regression_loss(a, b, model, 0.1)
 
     # an instance of the Wrapper class
-    model_wrapper = Wrapper(model=model, model_name=model_name, optim=optim, optim_params=optim_params, optim_name=optim_name, dataset_class=dataset_class, dataset_name=dataset_name, loss_func=loss_func)
+    model_wrapper = Wrapper(model=model, model_name=model_name, optim=optim, optim_params=optim_params, optim_name=optim_name, dataset_class=dataset_class, dataset_name=dataset_name, loss_func=loss_func, roi='EBA')
 
     # train using the Wrapper instance
-    main.train_model(model_wrapper, epoch = 500)
+    main.train_model(model_wrapper, epoch = 200)
     ```
 - Grid Search for optimal x, y, sigma. Status: **INCOMPLETE**.
 - Find the 1024 feature maps with highest variance for the fully connected layers. Status: **INCOMPLETE**.
