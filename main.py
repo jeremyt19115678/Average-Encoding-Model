@@ -378,12 +378,12 @@ def evaluate_performance(dataloader, model):
     with torch.no_grad():
         for X,y in dataloader:
             pred = model(X)
-            for i in pred.numpy().astype(np.float):
+            for i in pred.numpy().astype(np.float32):
                 predictions.append(i)
-            for i in y.numpy().astype(np.float):
+            for i in y.numpy().astype(np.float32):
                 labels.append(i)
             test_loss.append(loss_fn(pred, y).item())
-    corrcoef_matrix = np.corrcoef(np.array(predictions).astype(np.float32), np.array(labels).astype(np.float32))
+    corrcoef_matrix = np.corrcoef(np.array(predictions).squeeze().astype(np.float32), np.array(labels).squeeze().astype(np.float32))
     assert corrcoef_matrix.shape == (2, 2), "{}".format(corrcoef_matrix)
     return np.mean(test_loss), corrcoef_matrix[1,0]
 
@@ -400,7 +400,8 @@ def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64)
 
     def train(dataloader, model, loss_func, optimizer):
         for batch, (X, y) in enumerate(dataloader):
-            X, y = X.to(device), y.to(device)
+            if isinstance(X, torch.Tensor) and isinstance(y, torch.Tensor):
+                X, y = X.to(device), y.to(device)
             pred = model(X)
             loss = loss_func(pred, y)
             optimizer.zero_grad()
@@ -446,13 +447,6 @@ def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64)
     plt.ylabel("Pearson's Correlation")
     plt.title("Average Training Correlation over Time ({})\nTrained with {} using {} dataset".format(model_wrapper.model_name, model_wrapper.optim_name, model_wrapper.dataset_name))
     save_plot("training_r_curve.png", custom_path=experiment_folder)
-
-# TODO:
-# given the training set, return a mask for feature maps for the CNN's fully connected layers
-# that have more than reduction_size feature maps
-# the mask should retain the maximal variance
-def get_fully_connected_layer_mask(training_set, reduction_size = 1024):
-    pass
 
 def setVerbose(val):
     assert isinstance(val, bool)
