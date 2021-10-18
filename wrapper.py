@@ -2,6 +2,13 @@ from main import get_ROIs, fetch_image_ids_list
 import json
 import os
 
+def is_jsonable(x):
+    try:
+        json.dumps(x)
+        return True
+    except (TypeError, OverflowError):
+        return False
+
 class Wrapper:
     '''
     API/Parameters:
@@ -43,3 +50,5 @@ class Wrapper:
         self.loss_func = loss_func
         self.roi = roi
         self.num_samples = len(image_ids)
+        self.about_dict = {'image_ids': image_ids, 'roi': self.roi, 'model_name': self.model_name, 'optim_name': self.optim_name,
+                           'dataset_name': self.dataset_name, 'optim_params': [{key: val if is_jsonable(val) else 'not json serializable' for key, val in optim_dict.items()} for optim_dict in optim_params]}

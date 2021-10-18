@@ -245,7 +245,7 @@ def extract_shared_image_set_data():
             if len(set(nan_indices)) != 1:
                 print("Unexpected NaN value encountered in ROI: {}".format(roi))
 
-# def checks if a partition dictionary is valid
+# checks if a partition dictionary is valid
 def functional_partition(partition):
     assert isinstance(partition, dict), "Passed in value is not of type dict"
     right_length = len(partition.keys()) == 3
@@ -360,13 +360,6 @@ def generate_k_fold_dataset(partition: int):
         f.write(json.dumps(obj))
     print("Experiment file ({}) should be created.".format(experiment_folder))
 
-# returns a np array of shape (length,) and 0 at every index except position (where there's a 1)
-def one_hot_np(length: int, position: int):
-    assert isinstance(position, int) and 0 <= position <= length
-    arr = np.zeros(length).tolist()
-    arr[position] = 1
-    return np.array(arr)
-
 # evaluate the model (specified by the wrapper) using the specified dataset
 # performance evaluated with MSE and Pearson's Correlation
 # returns a tuple of two elements, the first is the MSE, the second is the Pearson's Correlation
@@ -388,15 +381,25 @@ def evaluate_performance(dataloader, model):
     return np.mean(test_loss), corrcoef_matrix[1,0]
 
 # train the model (specified by the wrapper) for specified numbers of epoch using the specified dataset
-def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64):
-    # TODO: print out what's being trained, using what
-    
+def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64, about_file = True, additional_info = None):
+    print("Training model\nModel name: {}\nROI: {}\nUsing {} dataset".format(model_wrapper.model_name, model_wrapper.roi, model_wrapper.dataset_name))
+
     # Get cpu or gpu device for training.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using {} device".format(device))
 
     # TODO: create `experiments` folder and `{model_wrapper.model_name}_train_{timestamp}` folder underneath it
-    experiment_folder = ""
+    experiment_path = os.path.realpath('experiments')
+    if not os.path.exists(experiment_path):
+        os.makedirs(os.path.realpath(experiment_path))
+    while True:
+        curr_time_ms = str(round(time.time()*1000))
+        experiment_folder = os.path.realpath(os.path.join(experiment_path, "{}_train_{}").format(model_wrapper.model_name, curr_time_ms))
+        if os.path.exists(experiment_folder): # if an experiment has already been created within the time, we wait for a while
+            continue
+        else:
+            os.makedirs(experiment_folder)
+            break # we move on putting the content in the experiment folder knowing that it won't overwrite any other data
 
     def train(dataloader, model, loss_func, optimizer):
         for batch, (X, y) in enumerate(dataloader):
@@ -447,6 +450,22 @@ def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64)
     plt.ylabel("Pearson's Correlation")
     plt.title("Average Training Correlation over Time ({})\nTrained with {} using {} dataset".format(model_wrapper.model_name, model_wrapper.optim_name, model_wrapper.dataset_name))
     save_plot("training_r_curve.png", custom_path=experiment_folder)
+
+    if about_file:
+        about_dict = model_wrapper.about_dict
+        about_dict['epoch'] = epoch
+        about_dict['batch_size'] = batch_size
+        about_dict['mse_list'] = train_mse_list
+        about_dict['r_list'] = train_r_list
+        if additional_info is not None:
+            for key, val in additional_info.items():
+                if key not in about_dict:
+                    about_dict[key] = val
+                else:
+                    print('not noting key {} in about.json'.format(key))
+        with open(os.path.join(experiment_folder, 'about.json'), 'w') as f:
+            f.write(json.dumps(about_dict))
+    print("Done.")
 
 def setVerbose(val):
     assert isinstance(val, bool)

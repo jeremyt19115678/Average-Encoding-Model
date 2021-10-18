@@ -69,4 +69,3 @@ returns the ridge regression loss given the beta and the model (to get the weigh
 '''
 def ridge_regression_loss(pred, label, lin_model, beta):
     return torch.mean(torch.pow(pred - label, 2)) + beta * (torch.sum(lin_model.lin.weight) + lin_model.lin.bias)
-    torch.mean(torch.pow(prediction - label, 2)) + regularization_constant * (torch.sum(model.feature_map_weights) + model.bias)
