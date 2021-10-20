@@ -68,4 +68,4 @@ class Linear_Model_Dataset(Dataset):
 returns the ridge regression loss given the beta and the model (to get the weights)
 '''
 def ridge_regression_loss(pred, label, lin_model, beta):
-    return torch.mean(torch.pow(pred - label, 2)) + beta * (torch.sum(lin_model.lin.weight) + lin_model.lin.bias)
+    return torch.mean(torch.pow(pred - label, 2)) + beta * (torch.sum(torch.pow(lin_model.lin.weight, 2)) + torch.pow(lin_model.lin.bias, 2))

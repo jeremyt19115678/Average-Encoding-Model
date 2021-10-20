@@ -180,3 +180,6 @@ class fwRF_Dataset(Dataset):
         # fetch the label of this image
         label = torch.tensor(self.roi_activation_map[image_ind]).reshape(1)
         return input, label
+
+def ridge_regression_loss(pred, label, model, beta):
+    return torch.mean(torch.pow(pred - label, 2)) + beta * (torch.sum(torch.pow(model.feature_map_weights.weight, 2)) + torch.pow(model.feature_map_weights.bias, 2))

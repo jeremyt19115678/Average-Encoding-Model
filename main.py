@@ -380,18 +380,31 @@ def evaluate_performance(dataloader, model):
     assert corrcoef_matrix.shape == (2, 2), "{}".format(corrcoef_matrix)
     return np.mean(test_loss), corrcoef_matrix[1,0]
 
-# train the model (specified by the wrapper) for specified numbers of epoch using the specified dataset
-def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64, about_file = True, additional_info = None):
+# train the model
+# the wrapper should include the optimizing algorithm (and its parameters), the dataset used
+# save determines whether the model parameter should be saved after it's trained
+# shuffle determines whether the dataset should be shuffled
+# batch_size determines the batch size used in optimization
+# about_file determines whether a about.json file would be created (to document the experiment)
+# additional_info is a dictionary containing all additional information about the experiment (e.g. the beta used in ridge regression)
+    # that is to be stored in about.json
+def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64, about_file = True, additional_info = None, experiment_path = None):
     print("Training model\nModel name: {}\nROI: {}\nUsing {} dataset".format(model_wrapper.model_name, model_wrapper.roi, model_wrapper.dataset_name))
 
     # Get cpu or gpu device for training.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using {} device".format(device))
 
-    # TODO: create `experiments` folder and `{model_wrapper.model_name}_train_{timestamp}` folder underneath it
-    experiment_path = os.path.realpath('experiments')
-    if not os.path.exists(experiment_path):
-        os.makedirs(os.path.realpath(experiment_path))
+    # if there isn't a given experiment_path, the data and graphs generated are stored in `experiments/{model_name}_train_{timestamp}` by default
+    if experiment_path == None:
+        experiment_path = os.path.realpath('experiments')
+        if not os.path.exists(experiment_path):
+            os.makedirs(os.path.realpath(experiment_path))
+    else:
+        if not os.path.isdir(os.path.realpath(experiment_path)):
+            print("supplied experiment_path is not a valid experiment folder:\n{}".format(experiment_path))
+            return
+    
     while True:
         curr_time_ms = str(round(time.time()*1000))
         experiment_folder = os.path.realpath(os.path.join(experiment_path, "{}_train_{}").format(model_wrapper.model_name, curr_time_ms))
@@ -465,7 +478,7 @@ def train_model(model_wrapper, epoch, save=False, shuffle=True, batch_size = 64,
                     print('not noting key {} in about.json'.format(key))
         with open(os.path.join(experiment_folder, 'about.json'), 'w') as f:
             f.write(json.dumps(about_dict))
-    print("Done.")
+    print("Done.\n")
 
 def setVerbose(val):
     assert isinstance(val, bool)
