@@ -26,14 +26,15 @@ class Average_Model_fwRF(nn.Module):
     self.bias is the bias that will be added at the end of the linear combination (PyTorch parameter for autograd)
     self.regularization_constant is the constant used in ridge regression for feature_map_weights
     '''
-    def __init__(self, dataset_type = 'validation', x = 0, y = 0, sigma = 1, input_shape=(1,3,227,227), fc_layer_max = 1024, aperture=1.0, device=torch.device("cpu")):
+    def __init__(self, dataset_type = 'validation', x = 0, y = 0, sigma = 1, input_shape=(1,3,227,227), fc_layer_max = 1024, aperture=1.0):
         super(Average_Model_fwRF, self).__init__()
         
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.aperture = aperture # I don't really get what this does
 
         # initialize a tensor of shape (1, 3, 227, 227) of random values from 0-1 (this resembles a picture)
         # we feed the picture into the _fmaps_fn to get an output to get a list of output of each layer
-        _x = torch.empty((1,)+input_shape[1:], device=device).uniform_(0, 1)
+        _x = torch.empty((1,)+input_shape[1:], device=self.device).uniform_(0, 1)
         _fmaps_fn = Alexnet_fmaps()
         all_fmaps = _fmaps_fn(_x)
         _fmaps = all_fmaps[:5] + all_fmaps[6:]
@@ -54,7 +55,7 @@ class Average_Model_fwRF(nn.Module):
         self.pool_variance = sigma
         self.feature_map_weights = nn.Linear(num_feature_maps, 1)
 
-        # generate the gaussian masses so it's faster to generate
+        # generate the gaussian masses so it can be repeatedly used
         self.gaussian_masses = [torch.from_numpy(self.make_gaussian_mass(npix)[2]) for npix in self.fmaps_rez]
 
         # load the validation images into a tensor of shape (n, 3, 227, 227) 
@@ -82,7 +83,8 @@ class Average_Model_fwRF(nn.Module):
                 variance_list = np.var(image_fc_layer_output, axis=0)
                 # get the indices of the maximal variances
                 maximal_variances_indices = np.argsort(variance_list)[-fc_layer_max:]
-                self.fc_layer_fmap_mask[layer_num] = [True if i in maximal_variances_indices else False for i in range(output[layer_num].shape[1])]
+                #self.fc_layer_fmap_mask[layer_num] = [True if i in maximal_variances_indices else False for i in range(output[layer_num].shape[1])]
+                self.fc_layer_fmap_mask[layer_num] = maximal_variances_indices
 
     # adopted from Zijin's code
     # modified slightly with help from the paper by Ghislain St-Yves et al.
@@ -111,34 +113,20 @@ class Average_Model_fwRF(nn.Module):
     # each of these feature maps after being dotted would generate a single scalar, which is then weighted by 
     # self.feature_map_weights then summed together (resulting in a linear combination of the feature maps' dot products)
     # this linear combination added with self.bias is the result of a single "forward" pass.
-    # TODO: needs fixing, output order has to be consistent with the passed in fmaps
     def forward(self, fmaps):
-        integrals = {}
+        #integrals = {}
+        integrals = []
         # for each element in the fmaps (represent the pooling field produced by one layer)
         for layer_num, bad_layer in enumerate(fmaps):
             # the images' feature maps from the layer_num-th of AlexNet
             layer = torch.squeeze(bad_layer, dim=1)
-            # for each element in the layer (the feature maps of a single picture)
-            for image_num, image_fmaps in enumerate(layer):
-                for fmap_num, fmap in enumerate(image_fmaps):
-                    assert len(tuple(fmap.shape)) == 2, "fmap.shape = {}".format(fmap.shape)
-                    # TODO: if the fmap is from a fully connected layer (shape = (1,1)), and it does not form
-                    # the highest variance subset, we don't include it in the integral calculation
-                    if tuple(fmap.shape) == (1,1) and not self.fc_layer_fmap_mask[layer_num][fmap_num]:
-                        continue
-                    # get the "integral" and append it to a list
-                    integral = torch.tensordot(fmap, self.gaussian_masses[layer_num])
-                    if image_num in integrals:
-                        integrals[image_num].append(integral)
-                    else:
-                        integrals[image_num] = [integral]
-        img_keys = sorted(list(integrals.keys()))
-        assert img_keys == [i for i in range(len(img_keys))] # because it should be in the same order as they are presented
-        integrals_list = [integrals[img_num] for img_num in img_keys]
-        integrals_torch = torch.tensor(integrals_list, dtype=torch.float32)
-        # get weighted sum of the integrals
-        # should be of shape (#num_images)
-        return self.feature_map_weights(integrals_torch)
+            if layer_num in self.fc_layer_fmap_mask:
+                layer_integrals = torch.tensordot(layer[:, self.fc_layer_fmap_mask[layer_num], :, :], self.gaussian_masses[layer_num], dims=([2, 3], [0, 1]))
+            else:
+                layer_integrals = torch.tensordot(layer, self.gaussian_masses[layer_num], dims=([2, 3], [0, 1]))
+            integrals.append(layer_integrals)
+        integrals_torch = torch.cat(integrals, dim=1)
+        return self.feature_map_weights(integrals_torch.detach())
 
 class fwRF_Dataset(Dataset):
     def __init__(self, partition: list, specific_roi: str):

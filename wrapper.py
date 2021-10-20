@@ -1,6 +1,7 @@
 from main import get_ROIs, fetch_image_ids_list
 import json
 import os
+import torch
 
 def is_jsonable(x):
     try:
@@ -32,6 +33,8 @@ class Wrapper:
         assert isinstance(model_name, str) and isinstance(optim_name, str), "Invalid model_name or optim_name. They must be strings."
         assert dataset_name in ['validation', 'test', 'train'], "Invalid dataset_name. It must be either 'validation', 'test', or 'train'."
         assert roi in get_ROIs(), "{} is not in the list of all available ROIs.".format(roi)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model.to(device)
         self.model = model
         model_name = model_name.strip()
         if ' ' in model_name:

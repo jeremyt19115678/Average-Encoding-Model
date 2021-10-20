@@ -1,0 +1,9 @@
+experiments/*
+v1_experiments/*
+*.pyc
+all_images_related_data/*
+models/*
+roiavgbeta/*
+NSD_stimuli/*
+__pycache__/*
+all_subj_roi_activations.json
