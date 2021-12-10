@@ -129,3 +129,5 @@ Note that the `validation` folder holds the validation/test set (**the precise u
 - Improve the `train_model()` function so that it allows for future methods to get the trained model's parameters (probably path to about.json) and returns the training result as well. Status: **INCOMPLETE**.
 - Write `setup.py` so setups are even easier. Status: **INCOMPLETE**.
 - Improve "Setting Up" section in README. Status: **INCOMPLETE**.
+- Speed up fwRF Dataset. Status: **INCOMPLETE**.
+- Speed up the fwRF model. Status: **INCOMPLETE**.

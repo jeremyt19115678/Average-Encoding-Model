@@ -12,6 +12,26 @@ from main import get_ROIs, fetch_image_ids_list
 def gaussian_mass(x, y, dx, dy, x_mean, y_mean, sigma):
     return 0.25*(erf((x+dx/2-x_mean)/(np.sqrt(2)*sigma)) - erf((x-dx/2-x_mean)/(np.sqrt(2)*sigma))) * (erf((y+dy/2-y_mean)/(np.sqrt(2)*sigma)) - erf((y-dy/2-y_mean)/(np.sqrt(2)*sigma)))
 
+# adopted from Zijin's code
+# modified slightly with help from the paper by Ghislain St-Yves et al.
+# "The feature-weighted receptive field: an interpretable encoding model for complex feature spaces"
+def make_gaussian_mass(x, y, sigma, n_pix):
+    deg = 1.0 # seem to be constant in Zijin's code
+    dpix = deg / n_pix
+    pix_min = -deg/2. + 0.5 * dpix
+    pix_max = deg/2.
+    X_mesh, Y_mesh = np.meshgrid(np.arange(pix_min,pix_max,dpix), np.arange(pix_min,pix_max,dpix))
+    # basically the same as NeuroGen's version, with the only difference being
+    # using erf instead of approximating the Gaussian blob integral when
+    # sigma >= dpix
+    if sigma <= 0:
+        Zm = torch.zeros_like(torch.from_numpy(X_mesh))
+    else:
+        g_mass = np.vectorize(lambda a, b: gaussian_mass(a, b, dpix, dpix, x, y, sigma)) 
+        Zm = g_mass(X_mesh, -Y_mesh).astype(np.float32)
+    assert tuple(Zm.shape) == (n_pix, n_pix), "Returned matrix is of size {} when feature map side length is {}.".format(tuple(Zm.shape), n_pix)
+    return X_mesh, -Y_mesh, Zm
+
 # largely adapted from Zijin's Code in Neurogen
 class Average_Model_fwRF(nn.Module):
 
@@ -26,7 +46,7 @@ class Average_Model_fwRF(nn.Module):
     self.bias is the bias that will be added at the end of the linear combination (PyTorch parameter for autograd)
     self.regularization_constant is the constant used in ridge regression for feature_map_weights
     '''
-    def __init__(self, dataset_type = 'validation', x = 0, y = 0, sigma = 1, input_shape=(1,3,227,227), fc_layer_max = 1024, aperture=1.0):
+    def __init__(self, dataset_type = 'validation', x = 0, y = 0, sigma = 1, input_shape=(1,3,227,227), layer_max_fmaps = 1024, aperture=1.0):
         super(Average_Model_fwRF, self).__init__()
         
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -38,25 +58,23 @@ class Average_Model_fwRF(nn.Module):
         _fmaps_fn = Alexnet_fmaps()
         all_fmaps = _fmaps_fn(_x)
         _fmaps = all_fmaps[:5] + all_fmaps[6:]
-        self.fmaps_rez = [] # should contain the resolution of the feature maps of each layer
+        #self.fmaps_rez = [] # should contain the resolution of the feature maps of each layer
         num_feature_maps = 0
         for k,_fm in enumerate(_fmaps):
             assert _fm.size()[2]==_fm.size()[3], 'All feature maps need to be square'
-            self.fmaps_rez += [_fm.size()[2],]
+            #self.fmaps_rez += [_fm.size()[2],]
             if _fm.size()[2] == 1: # this is a fully connected layer
-                num_feature_maps += _fm.size()[1] if _fm.size()[1] <= fc_layer_max else fc_layer_max
+                num_feature_maps += _fm.size()[1] if _fm.size()[1] <= layer_max_fmaps else layer_max_fmaps
             else: #this is a convolutional layer
                 num_feature_maps += _fm.size()[1]
         # self.fmaps_rez should contain 27, 27, 13, 13, 13, 1, 1, 1 (refer to README)
 
-        # should perhaps be random
+        # hyperparameters set by the user
         self.pool_mean_x = x
         self.pool_mean_y = y
         self.pool_variance = sigma
-        self.feature_map_weights = nn.Linear(num_feature_maps, 1)
 
-        # generate the gaussian masses so it can be repeatedly used
-        self.gaussian_masses = [torch.from_numpy(self.make_gaussian_mass(npix)[2]) for npix in self.fmaps_rez]
+        self.feature_map_weights = nn.Linear(num_feature_maps, len(get_ROIs()))
 
         # load the validation images into a tensor of shape (n, 3, 227, 227) 
         image_data_set = h5py.File(os.path.realpath('all_images_related_data/shared_images.h5py'), 'r')
@@ -68,73 +86,42 @@ class Average_Model_fwRF(nn.Module):
         # feed the validation images through AlexNet to get the output
         full_output = _fmaps_fn(image_data_torch)
         output = full_output[:5] + full_output[6:]
-        # note all the fully connected layers
-        fully_connected_layers = []
-        for layer_num, layer in enumerate(output):
-            if layer.shape[2] == layer.shape[3] == 1:
-                fully_connected_layers.append(layer_num)
-        self.fc_layer_fmap_mask = {i: [] for i in fully_connected_layers}
-        for layer_num in fully_connected_layers:
-            if output[layer_num].shape[1] <= fc_layer_max:
-                self.fc_layer_fmap_mask[layer_num] = [True for i in range(output[layer_num].shape[1])]
+        # pool the layers
+        pooled_layers = [torch.tensordot(layer, torch.from_numpy(make_gaussian_mass(self.pool_mean_x, self.pool_mean_y, self.pool_variance, layer.shape[2])[2]), dims=([2,3], [0,1])) for layer in output]
+
+        # for all layers with exceeding layer_max_fmaps feature maps, we only keep the layer_max_fmaps ones with the highest variance
+        layer_fmap_mask = []
+        for layer in pooled_layers:
+            if layer.shape[1] <= layer_max_fmaps:
+                layer_fmap_mask += [True] * layer.shape[1]
             else:
-                image_fc_layer_output = torch.squeeze(output[layer_num]).cpu().detach().numpy().astype(np.float32)
-                assert len(image_fc_layer_output.shape) == 2
-                variance_list = np.var(image_fc_layer_output, axis=0)
+                variance_list = np.var(layer.cpu().detach().numpy().astype(np.float32), axis=0)
                 # get the indices of the maximal variances
-                maximal_variances_indices = np.argsort(variance_list)[-fc_layer_max:]
-                #self.fc_layer_fmap_mask[layer_num] = [True if i in maximal_variances_indices else False for i in range(output[layer_num].shape[1])]
-                self.fc_layer_fmap_mask[layer_num] = maximal_variances_indices
+                maximal_variances_indices = np.argsort(variance_list)[-layer_max_fmaps:]
+                mask = [False] * layer.shape[1]
+                for ind in maximal_variances_indices:
+                    mask[ind] = True
+                layer_fmap_mask += mask
+        self.fmap_mask = np.argwhere(np.array(layer_fmap_mask))
 
-    # adopted from Zijin's code
-    # modified slightly with help from the paper by Ghislain St-Yves et al.
-    # "The feature-weighted receptive field: an interpretable encoding model for complex feature spaces"
-    def make_gaussian_mass(self, n_pix):
-        deg = 1.0 # seem to be constant in Zijin's code
-        dpix = deg / n_pix
-        pix_min = -deg/2. + 0.5 * dpix
-        pix_max = deg/2.
-        X_mesh, Y_mesh = np.meshgrid(np.arange(pix_min,pix_max,dpix), np.arange(pix_min,pix_max,dpix))
-        # basically the same as NeuroGen's version, with the only difference being
-        # using erf instead of approximating the Gaussian blob integral when
-        # sigma >= dpix
-        if self.pool_variance<=0:
-            Zm = torch.zeros_like(torch.from_numpy(X_mesh))
-        else:
-            g_mass = np.vectorize(lambda a, b: gaussian_mass(a, b, dpix, dpix, self.pool_mean_x, self.pool_mean_y, self.pool_variance)) 
-            Zm = g_mass(X_mesh, -Y_mesh).astype(np.float32)
-        assert tuple(Zm.shape) == (n_pix, n_pix), "Returned matrix is of size {} when feature map side length is {}.".format(tuple(Zm.shape), n_pix)
-        return X_mesh, -Y_mesh, Zm
-
-    # first calculate the "integrals" of each picture
-    # each picture generates a bunch of feature maps in each layer of AlexNet, and these feature maps (basically a matrix)
-    # are "dotted" (summed the products of corresponding entries) with the gaussian pooling field (generated using
-    # self.pool_variance, self.pool_mean_x, and self.pool_mean_y)
-    # each of these feature maps after being dotted would generate a single scalar, which is then weighted by 
-    # self.feature_map_weights then summed together (resulting in a linear combination of the feature maps' dot products)
-    # this linear combination added with self.bias is the result of a single "forward" pass.
+    # filter the feature maps until there is only the maximal variance ones remain
+    # then pass through the weights
     def forward(self, fmaps):
         #integrals = {}
-        integrals = []
-        # for each element in the fmaps (represent the pooling field produced by one layer)
-        for layer_num, bad_layer in enumerate(fmaps):
-            # the images' feature maps from the layer_num-th of AlexNet
-            layer = torch.squeeze(bad_layer, dim=1)
-            if layer_num in self.fc_layer_fmap_mask:
-                layer_integrals = torch.tensordot(layer[:, self.fc_layer_fmap_mask[layer_num], :, :], self.gaussian_masses[layer_num], dims=([2, 3], [0, 1]))
-            else:
-                layer_integrals = torch.tensordot(layer, self.gaussian_masses[layer_num], dims=([2, 3], [0, 1]))
-            integrals.append(layer_integrals)
-        integrals_torch = torch.cat(integrals, dim=1)
-        return self.feature_map_weights(integrals_torch.detach())
+        feature_maps = torch.squeeze(fmaps[:,self.fmap_mask])
+        #print(feature_maps.shape)
+        return self.feature_map_weights(feature_maps.detach())
 
 class fwRF_Dataset(Dataset):
-    def __init__(self, partition: list, specific_roi: str):
+    # the specific_roi parameter is a misnomer, it's required by the wrapper API, but we wouldn't really use it for
+    # specifying the ROI, as we want the Dataset for everything
+    # instead, we will let it be a tuple of (x,y,sigma), the hyperparameter for the pooling field
+    def __init__(self, partition: list, specific_roi):
         images_path = os.path.realpath('all_images_related_data/shared_images.h5py')
         assert os.path.exists(images_path)
         # get all the images
         image_file = h5py.File(images_path, 'r')
-        all_images = np.copy(image_file['image_data']).astype(np.float32)
+        all_images = np.copy(image_file['image_data']).astype(np.float32)[partition]
         image_file.close()
         # convert images into AlexNet readings and save them
         alexnet = Alexnet_fmaps()
@@ -144,29 +131,36 @@ class fwRF_Dataset(Dataset):
             image_tensor = torch.from_numpy(image.reshape(1, 3, 227, 227))
             fmaps = alexnet(image_tensor)
             readings.append(fmaps[:5] + fmaps[6:]) # skip over the 6th element, which is added for the sake of NN and not previously in fwRF used in neurogen
-        self.fmaps = readings
+        all_images_torch = torch.from_numpy(all_images)
+        full_output = alexnet(all_images_torch)
+        output = full_output[:5] + full_output[6:]
+        # pool the layers
+        x, y, sigma = specific_roi # again, specific_roi is a misnomer
+        pooled_layers = [torch.tensordot(layer, torch.from_numpy(make_gaussian_mass(x, y, sigma, layer.shape[2])[2]), dims=([2,3], [0,1])) for layer in output]
+        self.fmaps = torch.cat(pooled_layers, dim=1)
+
         # note the image ids
         assert isinstance(partition, list) and max(partition) <= 906 and min(partition) >= 0, "Image ID out of range"
         self.image_ids = partition
-        # note the roi this fwRF model is for
-        assert isinstance(specific_roi, str) and specific_roi in get_ROIs(), "Invalid ROI: {}".format(specific_roi)
-        self.roi = specific_roi
-        # load in the labels
-        filename = os.path.realpath('all_images_related_data/average_activation_{}.txt'.format(self.roi))
-        activation_list = np.loadtxt(filename).astype(np.float32)
-        assert activation_list.shape == (907, ), "activation_list length is {}, different from expected 907.".format(activation_list.shape)
-        self.roi_activation_map = activation_list
+
+        # load the label for all ROIs
+        rois = get_ROIs()
+        roi_activation_map = []
+        for roi in rois:
+            filename = os.path.realpath('all_images_related_data/average_activation_{}.txt'.format(roi))
+            activation_list = np.loadtxt(filename).astype(np.float32)
+            assert activation_list.shape == (907, ), "activation_list length is {}, different from expected 907.".format(activation_list.shape)
+            relevant_activations = activation_list[partition]
+            roi_activation_map.append(relevant_activations)
+        self.roi_activation_map = torch.transpose(torch.tensor(roi_activation_map), 0, 1)
 
     def __len__(self):
         return len(self.image_ids)
 
     def __getitem__(self, index):
-        # map from index to the id of the image and the roi
-        # get the id of the image
-        image_ind = self.image_ids[index]
-        input = self.fmaps[image_ind]
+        input = self.fmaps[index]
         # fetch the label of this image
-        label = torch.tensor(self.roi_activation_map[image_ind]).reshape(1)
+        label = self.roi_activation_map[index]
         return input, label
 
 def ridge_regression_loss(pred, label, model, beta):
