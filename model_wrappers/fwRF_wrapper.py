@@ -74,7 +74,7 @@ class Average_Model_fwRF(nn.Module):
         self.pool_mean_y = y
         self.pool_variance = sigma
 
-        self.feature_map_weights = nn.Linear(num_feature_maps, len(get_ROIs()))
+        self.feature_map_weights = torch.rand(num_feature_maps + 1, len(get_ROIs()))
 
         # load the validation images into a tensor of shape (n, 3, 227, 227) 
         image_data_set = h5py.File(os.path.realpath('all_images_related_data/shared_images.h5py'), 'r')
@@ -108,9 +108,26 @@ class Average_Model_fwRF(nn.Module):
     # then pass through the weights
     def forward(self, fmaps):
         #integrals = {}
-        feature_maps = torch.squeeze(fmaps[:,self.fmap_mask])
-        #print(feature_maps.shape)
-        return self.feature_map_weights(feature_maps.detach())
+        with torch.no_grad():
+            feature_maps = torch.squeeze(fmaps[:,self.fmap_mask]) # size (batch, features)
+            if len(feature_maps.shape) == 1:
+                feature_maps = torch.reshape(feature_maps, (1, feature_maps.shape[0]))
+            # add bias
+            X = torch.cat([feature_maps, torch.ones(feature_maps.shape[0], 1)], dim=1) # size (batch, features + 1)
+            return torch.mm(X, self.feature_map_weights)
+
+    def closed_form_solution(self, dataloader, beta):
+        with torch.no_grad():
+            X_list = [x for batch, (x,y) in enumerate(dataloader)]
+            X_without_bias = torch.t(torch.squeeze(torch.cat(X_list)[:, self.fmap_mask])) # size (features, set)
+            # have to add the bias term
+            X = torch.cat([X_without_bias, torch.ones(1, X_without_bias.shape[1])]) # size (features + 1, set)
+            Y_list = [y for batch, (x,y) in enumerate(dataloader)]
+            Y = torch.t(torch.cat(Y_list))
+            # front half of the closed form solution: (XX^T + beta*I)^-1X
+            front_term = torch.mm(torch.linalg.inv(torch.mm(X, torch.t(X)) + beta*torch.eye(len(self.fmap_mask) + 1)), X)
+            closed_form_solution = torch.cat([torch.mm(front_term, torch.unsqueeze(yi, 1)) for yi in Y], dim=1)
+            self.feature_map_weights = closed_form_solution
 
 class fwRF_Dataset(Dataset):
     # the specific_roi parameter is a misnomer, it's required by the wrapper API, but we wouldn't really use it for
@@ -162,6 +179,3 @@ class fwRF_Dataset(Dataset):
         # fetch the label of this image
         label = self.roi_activation_map[index]
         return input, label
-
-def ridge_regression_loss(pred, label, model, beta):
-    return torch.mean(torch.pow(pred - label, 2)) + beta * (torch.sum(torch.pow(model.feature_map_weights.weight, 2)) + torch.pow(model.feature_map_weights.bias, 2))
